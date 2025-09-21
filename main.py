@@ -194,7 +194,45 @@ def split_excel_with_template(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     status_cb("Membaca sumber...")
-    df = pd.read_excel(source_path, sheet_name=sheet_name, dtype=object)
+
+    # Diagnostic logging
+    try:
+        file_size = source_path.stat().st_size if source_path.exists() else 0
+        status_cb(f"Debug: File path: {source_path}")
+        status_cb(f"Debug: File exists: {source_path.exists()}")
+        status_cb(f"Debug: File size: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
+        status_cb(f"Debug: Sheet name: '{sheet_name}'")
+        status_cb("Debug: Starting pd.read_excel...")
+
+        # Try reading with timeout and error handling
+        import time
+        start_time = time.time()
+
+        # First try to read just the header to test file accessibility
+        status_cb("Debug: Testing file accessibility...")
+        try:
+            # Try to read just first few rows to test
+            df_test = pd.read_excel(source_path, sheet_name=sheet_name, nrows=5, dtype=object)
+            status_cb(f"Debug: Successfully read {len(df_test)} rows for testing")
+        except Exception as test_e:
+            status_cb(f"Debug: Test read failed: {str(test_e)}")
+            raise test_e
+
+        # Now read the full file
+        df = pd.read_excel(source_path, sheet_name=sheet_name, dtype=object)
+
+        elapsed = time.time() - start_time
+        status_cb(f"Debug: Successfully read {len(df)} rows in {elapsed:.2f} seconds")
+
+    except FileNotFoundError as e:
+        status_cb(f"Debug: File not found: {e}")
+        raise FileNotFoundError(f"File tidak ditemukan: {source_path}")
+    except PermissionError as e:
+        status_cb(f"Debug: Permission denied: {e}")
+        raise PermissionError(f"Tidak ada akses ke file: {source_path}")
+    except Exception as e:
+        status_cb(f"Debug: Error reading Excel: {type(e).__name__}: {str(e)}")
+        raise e
 
     # Tentukan kolom kunci
     if isinstance(key_col, int):
@@ -205,6 +243,27 @@ def split_excel_with_template(
         if key_col not in df.columns:
             raise ValueError(f"Header kolom kunci '{key_col}' tidak ditemukan.")
         key_series = df[key_col]
+
+    # Debug: Check for categorical data issues
+    status_cb(f"Debug: Key column '{key_col}' data type: {key_series.dtype}")
+    status_cb(f"Debug: Key column unique values: {len(key_series.unique())}")
+    status_cb(f"Debug: Key column has null values: {key_series.isnull().sum()}")
+
+    # Check for categorical columns in the entire DataFrame
+    categorical_cols = []
+    for col in df.columns:
+        if df[col].dtype.name == 'category':
+            categorical_cols.append(col)
+            status_cb(f"Debug: Found categorical column: {col}")
+
+    if categorical_cols:
+        status_cb(f"Debug: Converting {len(categorical_cols)} categorical columns to string...")
+        for col in categorical_cols:
+            try:
+                df[col] = df[col].astype(str)
+                status_cb(f"Debug: Converted {col} to string")
+            except Exception as conv_e:
+                status_cb(f"Debug: Failed to convert {col}: {conv_e}")
 
     # Selaraskan urutan kolom ke header template jika cocok
     templ_cols = None
@@ -230,9 +289,49 @@ def split_excel_with_template(
         if exist:
             df = df[exist]
 
-    groups = df.groupby(key_series, dropna=False, sort=False)
-    total, current = len(groups), 0
-    progress_cb(total, 0)
+    # Debug: Check groupby operation
+    status_cb("Debug: Starting groupby operation...")
+    try:
+        groups = df.groupby(key_series, dropna=False, sort=False)
+        total, current = len(groups), 0
+        status_cb(f"Debug: Groupby successful, found {total} groups")
+        progress_cb(total, 0)
+    except Exception as groupby_e:
+        status_cb(f"Debug: Groupby error: {type(groupby_e).__name__}: {str(groupby_e)}")
+
+        # Try multiple approaches to fix the issue
+        if "categorical" in str(groupby_e).lower():
+            status_cb("Debug: Attempting to fix categorical issue...")
+
+            # Method 1: Try converting all categorical columns to object
+            try:
+                status_cb("Debug: Method 1 - Converting all categorical columns to object...")
+                df_no_cat = df.copy()
+                for col in df_no_cat.columns:
+                    if df_no_cat[col].dtype.name == 'category':
+                        df_no_cat[col] = df_no_cat[col].astype('object')
+                groups = df_no_cat.groupby(key_series, dropna=False, sort=False)
+                total, current = len(groups), 0
+                status_cb(f"Debug: Method 1 successful, found {total} groups")
+                progress_cb(total, 0)
+                # Update df to use the fixed version
+                df = df_no_cat
+            except Exception as method1_e:
+                status_cb(f"Debug: Method 1 failed: {method1_e}")
+
+                # Method 2: Try using string conversion for groupby
+                try:
+                    status_cb("Debug: Method 2 - Using string keys for groupby...")
+                    string_keys = key_series.astype(str)
+                    groups = df.groupby(string_keys, dropna=False, sort=False)
+                    total, current = len(groups), 0
+                    status_cb(f"Debug: Method 2 successful, found {total} groups")
+                    progress_cb(total, 0)
+                except Exception as method2_e:
+                    status_cb(f"Debug: Method 2 failed: {method2_e}")
+                    raise groupby_e
+        else:
+            raise groupby_e
 
     for key_val, group in groups:
         current += 1
@@ -541,7 +640,8 @@ class SplitApp(ctk.CTk):
                     self.log(out); self.log(err)
                     self.after(0, lambda: messagebox.showerror("LibreOffice Error", "Gagal export PDF. Lihat log."))
                 except Exception as e:
-                    self.after(0, lambda: messagebox.showerror("Error", str(e)))
+                    error_msg = str(e)
+                    self.after(0, lambda: messagebox.showerror("Error", error_msg))
                 finally:
                     self.set_busy(False)
 
