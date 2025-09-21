@@ -344,10 +344,38 @@ def split_excel_with_template(
         start_row = header_rows + 1
 
         values = group.fillna("").values.tolist()
+
+        # Copy formatting from template row to data rows
+        # Use the first data row from template as formatting template
+        template_row = start_row  # This should be the first data row in template
+
         for r_off, row_vals in enumerate(values, start=0):
             row_idx = start_row + r_off
+
+            # Copy values
             for c_idx, v in enumerate(row_vals, start=1):
                 ws.cell(row=row_idx, column=c_idx, value=v)
+
+            # Copy formatting from template row to current row
+            if r_off > 0:  # Don't copy formatting to the template row itself
+                try:
+                    # Copy formatting from template row to current row
+                    for col_idx in range(1, len(row_vals) + 1):
+                        template_cell = ws.cell(row=template_row, column=col_idx)
+                        current_cell = ws.cell(row=row_idx, column=col_idx)
+
+                        # Copy all formatting properties
+                        if template_cell.has_style:
+                            current_cell.font = template_cell.font.copy()
+                            current_cell.fill = template_cell.fill.copy()
+                            current_cell.border = template_cell.border.copy()
+                            current_cell.alignment = template_cell.alignment.copy()
+                            current_cell.number_format = template_cell.number_format
+                            current_cell.protection = template_cell.protection.copy()
+
+                except Exception as format_e:
+                    # If formatting copy fails, continue without it
+                    pass
 
         last_data_row = start_row + len(values) - 1
         set_print_titles_and_area(ws, header_rows, max(1, group.shape[1]), last_data_row)
