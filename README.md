@@ -25,7 +25,7 @@ Excel Splitter is a Python-based desktop application that allows you to split la
 
 ### Option 1: Using Pre-built Executable (Recommended)
 
-1. Download the latest release from the [releases page](https://https://github.com/faizalindrak/ExcelSplitter/releases)
+1. Download the latest release from the [releases page](https://github.com/faizalindrak/ExcelSplitter/releases)
 2. Extract the ZIP file to your desired location
 3. Run `ExcelSplitter.exe`
 4. The application is ready to use!
