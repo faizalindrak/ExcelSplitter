@@ -474,6 +474,7 @@ class SplitApp(ctk.CTk):
         self.var_prefix = tk.StringVar(value="")
         self.var_suffix = tk.StringVar(value="")
         self.var_theme = tk.StringVar(value="blue")
+        self.var_loaded_ini = tk.StringVar(value="")
 
         self.is_running = False
         self.worker_thread = None
@@ -539,16 +540,26 @@ class SplitApp(ctk.CTk):
         main_frame = ctk.CTkFrame(self)
         main_frame.pack(fill="both", expand=True, padx=16, pady=16)
 
-        # Theme selector at top
-        theme_frame = ctk.CTkFrame(main_frame)
-        theme_frame.pack(fill="x", padx=10, pady=(10, 0))
-        ctk.CTkLabel(theme_frame, text="Theme:").pack(side="left", padx=(10, 5))
-        theme_combo = ctk.CTkComboBox(theme_frame, values=["blue", "green", "dark-blue"], variable=self.var_theme, width=120, command=self.change_theme)
-        theme_combo.pack(side="left", padx=(0, 20))
-        self.btn_save_top = ctk.CTkButton(theme_frame, text="Save .ini", command=self.save_ini, width=80)
+        # Top bar with left and right sections
+        top_frame = ctk.CTkFrame(main_frame)
+        top_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        # Left section: Save/Load buttons
+        left_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        left_frame.pack(side="left")
+        self.btn_save_top = ctk.CTkButton(left_frame, text="Save .ini", command=self.save_ini, width=80)
         self.btn_save_top.pack(side="left", padx=(0, 8))
-        self.btn_load_top = ctk.CTkButton(theme_frame, text="Load .ini", command=self.load_ini, width=80)
-        self.btn_load_top.pack(side="left", padx=(0, 10))
+        self.btn_load_top = ctk.CTkButton(left_frame, text="Load .ini", command=self.load_ini, width=80)
+        self.btn_load_top.pack(side="left", padx=(0, 8))
+        self.lbl_loaded_ini = ctk.CTkLabel(left_frame, textvariable=self.var_loaded_ini, fg_color="transparent")
+        self.lbl_loaded_ini.pack(side="left")
+
+        # Right section: Theme selector
+        right_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        right_frame.pack(side="right")
+        ctk.CTkLabel(right_frame, text="Theme:").pack(side="left", padx=(0, 5))
+        theme_combo = ctk.CTkComboBox(right_frame, values=["blue", "green", "dark-blue"], variable=self.var_theme, width=120, command=self.change_theme)
+        theme_combo.pack(side="left")
 
         # Tabview
         self.tabview = ctk.CTkTabview(main_frame, width=800, height=600)
@@ -662,9 +673,12 @@ class SplitApp(ctk.CTk):
     def _set_busy_impl(self, busy: bool):
         self.is_running = busy
         state = "disabled" if busy else "normal"
-        self.btn_run.configure(state=state, text="Generating..." if busy else "Generate")
-        self.btn_save.configure(state=state)
-        self.btn_load.configure(state=state)
+        try:
+            self.btn_run.configure(state=state, text="Generating..." if busy else "Generate")
+            self.btn_save_top.configure(state=state)
+            self.btn_load_top.configure(state=state)
+        except AttributeError:
+            pass  # UI being recreated
         self.configure(cursor="watch" if busy else "")
         if not busy:
             self.pbar.set(0.0)
@@ -901,6 +915,7 @@ class SplitApp(ctk.CTk):
             self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
             self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
 
+            self.var_loaded_ini.set(f"Loaded: {Path(f).name}")
             self.log(f"Konfigurasi dimuat: {f}")
         except Exception as e:
             messagebox.showerror("Error", f"Format .ini tidak valid: {e}")
