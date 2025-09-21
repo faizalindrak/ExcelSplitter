@@ -182,7 +182,7 @@ def export_pdf_pure(group_df: pd.DataFrame, template_path: Path, header_rows: in
 def split_excel_with_template(
     source_path: Path, sheet_name: str, key_col, template_path: Path, out_dir: Path,
     header_rows: int, pdf_engine: str = "reportlab", soffice_path: str | None = None,
-    status_cb=None, progress_cb=None
+    prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None
 ):
     if status_cb is None: status_cb = lambda msg: None
     if progress_cb is None: progress_cb = lambda t, c: None
@@ -428,7 +428,16 @@ def split_excel_with_template(
         last_data_row = start_row + len(values) - 1
         set_print_titles_and_area(ws, header_rows, max(1, group.shape[1]), last_data_row)
 
-        out_name = f"SCHEDULE {safe_file_part(key_val)}"
+        # Build filename with prefix and suffix
+        key_part = safe_file_part(key_val)
+        parts = []
+        if prefix:
+            parts.append(prefix)
+        parts.append(key_part)
+        if suffix:
+            parts.append(suffix)
+
+        out_name = " ".join(parts)
         xlsx_out = out_dir / f"{out_name}.xlsx"
         wb.save(xlsx_out)
 
@@ -450,7 +459,7 @@ class SplitApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel Splitter (Template-based)")
-        self.geometry("980x660")
+        self.geometry("980x700")
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("green")
 
@@ -462,6 +471,8 @@ class SplitApp(ctk.CTk):
         self.var_header_rows = tk.IntVar(value=5)
         self.var_pdf_engine = tk.StringVar(value="reportlab")
         self.var_lo_path = tk.StringVar()
+        self.var_prefix = tk.StringVar(value="")
+        self.var_suffix = tk.StringVar(value="")
 
         self.is_running = False
         self.worker_thread = None
@@ -508,21 +519,27 @@ class SplitApp(ctk.CTk):
         ctk.CTkEntry(frame, textvariable=self.var_lo_path, width=520).grid(row=7, column=1, sticky="we", **pad)
         ctk.CTkButton(frame, text="Browse...", command=self.browse_soffice).grid(row=7, column=2, **pad)
 
+        ctk.CTkLabel(frame, text="Prefix").grid(row=8, column=0, sticky="e", **pad)
+        ctk.CTkEntry(frame, textvariable=self.var_prefix, width=240).grid(row=8, column=1, sticky="w", **pad)
+
+        ctk.CTkLabel(frame, text="Suffix").grid(row=9, column=0, sticky="e", **pad)
+        ctk.CTkEntry(frame, textvariable=self.var_suffix, width=240).grid(row=9, column=1, sticky="w", **pad)
+
         # ACTIONS
-        btns = ctk.CTkFrame(frame); btns.grid(row=8, column=0, columnspan=3, sticky="we", padx=12, pady=(4, 0))
+        btns = ctk.CTkFrame(frame); btns.grid(row=10, column=0, columnspan=3, sticky="we", padx=12, pady=(4, 0))
         self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked); self.btn_run.pack(side="left", padx=(0, 8))
         self.btn_save = ctk.CTkButton(btns, text="Save .ini", command=self.save_ini); self.btn_save.pack(side="left", padx=8)
         self.btn_load = ctk.CTkButton(btns, text="Load .ini", command=self.load_ini); self.btn_load.pack(side="left", padx=8)
 
         # PROGRESS + LOG
         self.pbar = ctk.CTkProgressBar(frame, mode="determinate", width=640)
-        self.pbar.grid(row=9, column=0, columnspan=3, sticky="we", padx=12, pady=(14, 4))
+        self.pbar.grid(row=11, column=0, columnspan=3, sticky="we", padx=12, pady=(14, 4))
         self.pbar.set(0.0)
-        self.txt_status = ctk.CTkTextbox(frame, height=160)
-        self.txt_status.grid(row=10, column=0, columnspan=3, sticky="nsew", padx=12, pady=(10, 14))
+        self.txt_status = ctk.CTkTextbox(frame, height=300)
+        self.txt_status.grid(row=12, column=0, columnspan=3, sticky="nsew", padx=12, pady=(10, 14))
 
         frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(10, weight=1)
+        frame.grid_rowconfigure(12, weight=1)
 
     # ------------- UI Helpers -------------
 
@@ -702,6 +719,8 @@ class SplitApp(ctk.CTk):
                         header_rows=header_rows,
                         pdf_engine=pdf_engine,
                         soffice_path=soffice_path,
+                        prefix=self.var_prefix.get().strip(),
+                        suffix=self.var_suffix.get().strip(),
                         status_cb=self.log,
                         progress_cb=self.set_progress
                     )
@@ -751,7 +770,9 @@ class SplitApp(ctk.CTk):
         cfg["output"] = {
             "output_dir": self.var_outdir.get().strip(),
             "pdf_engine": self.var_pdf_engine.get().strip().lower(),
-            "libreoffice_path": self.var_lo_path.get().strip()
+            "libreoffice_path": self.var_lo_path.get().strip(),
+            "prefix": self.var_prefix.get().strip(),
+            "suffix": self.var_suffix.get().strip()
         }
         with open(f, "w", encoding="utf-8") as fp:
             cfg.write(fp)
@@ -778,6 +799,8 @@ class SplitApp(ctk.CTk):
             self.var_outdir.set(cfg.get("output", "output_dir", fallback=""))
             self.var_pdf_engine.set(cfg.get("output", "pdf_engine", fallback="reportlab").lower())
             self.var_lo_path.set(cfg.get("output", "libreoffice_path", fallback=""))
+            self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
+            self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
 
             self.log(f"Konfigurasi dimuat: {f}")
         except Exception as e:
