@@ -638,6 +638,35 @@ class SplitApp(ctk.CTk):
         # ACTIONS TAB
         actions_tab = self.tabview.tab("Actions")
 
+        # Configuration Summary
+        summary_frame = ctk.CTkFrame(actions_tab)
+        summary_frame.pack(fill="x", padx=12, pady=(10, 10))
+
+        ctk.CTkLabel(summary_frame, text="Configuration Summary", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5))
+
+        # Create summary labels
+        self.summary_labels = {}
+        config_items = [
+            ("Source File", self.var_source),
+            ("Sheet Name", self.var_sheet),
+            ("Key Column", self.var_keycol),
+            ("Template File", self.var_template),
+            ("Header Rows", self.var_header_rows),
+            ("Output Folder", self.var_outdir),
+            ("PDF Engine", self.var_pdf_engine),
+            ("LibreOffice Path", self.var_lo_path),
+            ("Prefix", self.var_prefix),
+            ("Suffix", self.var_suffix),
+        ]
+
+        for label_text, var in config_items:
+            row_frame = ctk.CTkFrame(summary_frame, fg_color="transparent")
+            row_frame.pack(fill="x", padx=10, pady=0)
+            ctk.CTkLabel(row_frame, text=f"{label_text}:", width=120, anchor="w").pack(side="left")
+            value_label = ctk.CTkLabel(row_frame, textvariable=var, anchor="w")
+            value_label.pack(side="left", fill="x", expand=True)
+            self.summary_labels[label_text] = value_label
+
         # Buttons
         btns = ctk.CTkFrame(actions_tab)
         btns.pack(fill="x", padx=12, pady=(10, 4))
