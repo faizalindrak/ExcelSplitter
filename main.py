@@ -343,6 +343,54 @@ def split_excel_with_template(
         ws = wb.active
         start_row = header_rows + 1
 
+        # Comprehensive cleanup to eliminate all Excel repair warnings
+        try:
+            # 1. Remove all named ranges (common cause of repair warnings)
+            if hasattr(wb, 'defined_names'):
+                wb.defined_names = {}
+
+            # 2. Remove external links
+            if hasattr(wb, '_external_links') and wb._external_links:
+                wb._external_links.clear()
+
+            # 3. Remove external link relationships
+            if hasattr(wb, '_external_link_rels'):
+                wb._external_link_rels.clear()
+
+            # 4. Remove all drawings completely (they often cause repair issues)
+            if hasattr(ws, '_drawings'):
+                ws._drawings = []
+
+            # 5. Clean up worksheet-level named ranges
+            if hasattr(ws, 'defined_names'):
+                ws.defined_names = []
+
+            # 6. Remove external link parts from the package
+            try:
+                from openpyxl.packaging.relationship import Relationship
+                if hasattr(wb, '_rels'):
+                    # Remove external link relationships
+                    rels_to_remove = []
+                    for rel in wb._rels:
+                        if ('externalLink' in str(rel.target) or
+                            'externalLinks' in str(rel.target) or
+                            'drawing' in str(rel.target).lower()):
+                            rels_to_remove.append(rel)
+                    for rel in rels_to_remove:
+                        wb._rels.remove(rel)
+            except:
+                pass
+
+            # 7. Clean up any hyperlinks that might reference external data
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.hyperlink:
+                        cell.hyperlink = None
+
+        except Exception as cleanup_e:
+            # If cleanup fails, continue anyway
+            pass
+
         values = group.fillna("").values.tolist()
 
         # Copy formatting from template row to data rows
