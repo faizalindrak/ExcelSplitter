@@ -14,7 +14,7 @@ import os
 # ---- opsi yang bisa kamu ubah ----
 APP_NAME    = "ExcelSplitter"
 ENTRY_SCRIPT= "main.py"
-ICON_PATH   = None   # contoh: "app.ico"  (atau None jika tidak pakai)
+ICON_PATH   = "excel-split.ico"   # contoh: "app.ico"  (atau None jika tidak pakai)
 CONSOLE     = False  # GUI app
 UPX         = True   # butuh UPX terpasang agar efektif, kalau tidak ada tetap aman
 # ----------------------------------
