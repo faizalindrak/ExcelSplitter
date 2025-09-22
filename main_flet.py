@@ -914,6 +914,9 @@ class ExcelSplitterApp:
         file_picker = ft.FilePicker(on_result=self.on_source_file_selected)
         self.page.overlay.append(file_picker)
         self.page.update()
+
+        # Ensure configuration summary is initialized
+        self.page.after_next_render = self.initialize_config_summary
         
         await file_picker.pick_files(
             allow_multiple=False,
@@ -928,6 +931,9 @@ class ExcelSplitterApp:
             self.source_field.value = self.source_path
             self.log_status(f"Source selected: {Path(self.source_path).name}")
             self.source_field.update()
+
+            # Update configuration summary when file is selected
+            self.update_config_summary()
 
     async def browse_template_file(self, e):
         """Browse for template Excel file"""
@@ -949,6 +955,9 @@ class ExcelSplitterApp:
             self.log_status(f"Template selected: {Path(self.template_path).name}")
             self.template_field.update()
 
+            # Update configuration summary when file is selected
+            self.update_config_summary()
+
     async def browse_output_folder(self, e):
         """Browse for output folder"""
         folder_picker = ft.FilePicker(on_result=self.on_output_folder_selected)
@@ -964,6 +973,9 @@ class ExcelSplitterApp:
             self.output_field.value = self.output_dir
             self.log_status(f"Output folder: {Path(self.output_dir).name}")
             self.output_field.update()
+
+            # Update configuration summary when folder is selected
+            self.update_config_summary()
 
     async def browse_libreoffice(self, e):
         """Browse for LibreOffice executable"""
@@ -984,6 +996,9 @@ class ExcelSplitterApp:
             self.libreoffice_field.value = self.libreoffice_path
             self.log_status(f"LibreOffice path set")
             self.libreoffice_field.update()
+
+            # Update configuration summary when LibreOffice path is selected
+            self.update_config_summary()
 
     # Data loading methods
     def load_sheets(self, e):
@@ -1071,6 +1086,9 @@ class ExcelSplitterApp:
 
     def on_form_field_change(self, e):
         """Handle form field value changes"""
+        # Debug: Log which field triggered the change
+        self.log_status(f"DEBUG: Form field changed: {e.control.label if hasattr(e.control, 'label') else e.control.hint_text}")
+
         # Update configuration summary when any form field changes
         self.update_config_summary()
 
@@ -1232,9 +1250,15 @@ class ExcelSplitterApp:
         # Update configuration summary
         self.update_config_summary()
 
+    def initialize_config_summary(self):
+        """Initialize configuration summary after UI is rendered"""
+        self.log_status("DEBUG: Initializing configuration summary")
+        self.update_config_summary()
+
     def update_config_summary(self):
         """Update the configuration summary with current values"""
-        if not hasattr(self, 'config_summary_refs'):
+        if not hasattr(self, 'config_summary_refs') or not self.config_summary_refs:
+            self.log_status("DEBUG: Config summary refs not initialized yet")
             return
 
         # Get summary text references
@@ -1267,8 +1291,16 @@ class ExcelSplitterApp:
         else:
             output_ref.value = "Not selected"
 
+        # Debug: Log current values
+        self.log_status(f"DEBUG: Summary update - source: {self.source_path}, sheet: {self.sheet_name}, key: {self.key_column}")
+        self.log_status(f"DEBUG: Summary update - template: {self.template_path}, output: {self.output_dir}")
+
         # Update the page to reflect changes
-        self.page.update()
+        try:
+            self.page.update()
+            self.log_status("DEBUG: Configuration summary updated successfully")
+        except Exception as e:
+            self.log_status(f"DEBUG: Error updating configuration summary: {str(e)}")
 
     def validate_inputs(self):
         """Validate all required inputs"""
