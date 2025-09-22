@@ -491,7 +491,7 @@ class ExcelSplitterApp:
 
     def setup_page(self):
         """Configure the main page with modern Fluent Design settings"""
-        self.page.title = "Excel Splitter - Modern UI"
+        self.page.title = "Excel Splitter"
         self.page.theme_mode = ft.ThemeMode.SYSTEM
         self.page.window.width = 1000
         self.page.window.height = 700
@@ -853,7 +853,7 @@ class ExcelSplitterApp:
                         subtitle=ft.Text("Not selected", ref=output_ref)
                     ),
                 ]),
-                padding=20
+                padding=10
             )
         )
         
@@ -1458,6 +1458,8 @@ class ExcelSplitterApp:
                 ft.Text("• PDF export support"),
                 ft.Text("• Modern Fluent Design UI"),
                 ft.Text("• Configuration save/load"),
+                ft.Divider(height=10),
+                ft.Text("Developed by Faizal Kusmawan (2025)"),
             ], tight=True),
             actions=[
                 ft.TextButton("Close", on_click=lambda _: self.close_dialog(about_dialog))
