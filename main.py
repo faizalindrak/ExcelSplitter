@@ -1,4 +1,4 @@
-# main_flet.py
+# main.py
 # Modern Flet-based GUI for Excel splitter with Fluent Design styling
 # This is the modernized version of the CustomTkinter application
 
