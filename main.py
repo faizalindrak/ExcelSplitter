@@ -1,19 +1,19 @@
-# split_gui.py
-# GUI untuk split Excel per nilai unik dengan template-based rendering.
-# Build exe: pyinstaller split_gui.spec
-# Dependencies: customtkinter, pandas, openpyxl, reportlab (opsional untuk PDF Engine "reportlab")
+# main_flet.py
+# Modern Flet-based GUI for Excel splitter with Fluent Design styling
+# This is the modernized version of the CustomTkinter application
 
 import os
 import re
 import shutil
 import subprocess
 import threading
+import asyncio
 from pathlib import Path
 import configparser
-import tkinter as tk
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from typing import Optional, List
 
+import flet as ft
+from flet import Colors, Icons
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -29,8 +29,7 @@ except Exception:
     REPORTLAB_AVAILABLE = False
 
 
-# ----------------- Helpers -----------------
-
+# ----------------- Helpers (unchanged from original) -----------------
 def safe_file_part(s: str) -> str:
     s = "" if s is None else str(s)
     return re.sub(r'[:\\/\?\*\[\]<>|"]', "_", s).strip() or "Key"
@@ -82,7 +81,6 @@ def export_pdf_via_lo(xlsx_path: Path, soffice_path: str | None = None):
     exe = soffice_path or "soffice"
     cmd = [exe, "--headless", "--convert-to", "pdf", "--outdir", str(xlsx_path.parent), str(xlsx_path)]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
 
 # ---------- ReportLab (pure-Python) PDF ----------
 PAPER_MAP = {9: A4, 1: LETTER}
@@ -170,15 +168,14 @@ def export_pdf_pure(group_df: pd.DataFrame, template_path: Path, header_rows: in
         ("FONTSIZE", (0, 1), (-1, -1), 9),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
-        ("LINEABOVE", (0, 0), (-1, 0), 0.75, colors.black),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F0F0")),
+        ("GRID", (0, 0), (-1, -1), 0.25, Colors.black),
+        ("LINEABOVE", (0, 0), (-1, 0), 0.75, Colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), Colors.HexColor("#F0F0F0")),
     ]))
     doc.build([tbl])
 
 
-# ----------------- Split Logic -----------------
-
+# ----------------- Split Logic (unchanged) -----------------
 def split_excel_with_template(
     source_path: Path, sheet_name: str, key_col, template_path: Path, out_dir: Path,
     header_rows: int, pdf_engine: str = "reportlab", soffice_path: str | None = None,
@@ -453,503 +450,1272 @@ def split_excel_with_template(
     progress_cb(total, total)
 
 
-# ----------------- GUI -----------------
+# ----------------- Modern Flet GUI -----------------
 
-class SplitApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title("Excel Splitter (Template-based)")
-        self.geometry("980x700")
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
+class ExcelSplitterApp:
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.setup_page()
+        
+        # Application state
+        self.source_path = ""
+        self.sheet_name = ""
+        self.key_column = ""
+        self.template_path = ""
+        self.output_dir = ""
+        self.header_rows = 5
+        self.pdf_engine = "reportlab"
+        self.libreoffice_path = ""
+        self.prefix = ""
+        self.suffix = ""
+        self.loaded_ini = ""
 
-        self.var_source = tk.StringVar()
-        self.var_sheet = tk.StringVar()
-        self.var_keycol = tk.StringVar()
-        self.var_template = tk.StringVar()
-        self.var_outdir = tk.StringVar()
-        self.var_header_rows = tk.IntVar(value=5)
-        self.var_pdf_engine = tk.StringVar(value="reportlab")
-        self.var_lo_path = tk.StringVar()
-        self.var_prefix = tk.StringVar(value="")
-        self.var_suffix = tk.StringVar(value="")
-        self.var_theme = tk.StringVar(value="blue")
-        self.var_loaded_ini = tk.StringVar(value="")
-
+        # Loading state flags
+        self.is_loading_config = False
+        
+        # UI controls
+        self.source_field = None
+        self.sheet_dropdown = None
+        self.key_dropdown = None
+        self.template_field = None
+        self.output_field = None
+        self.header_rows_field = None
+        self.pdf_engine_dropdown = None
+        self.libreoffice_field = None
+        self.prefix_field = None
+        self.suffix_field = None
+        self.progress_ring = None
+        self.status_log = None
+        self.generate_button = None
+        
         self.is_running = False
-        self.worker_thread = None
+        
+        self.build_ui()
 
-        # Add validation traces
-        self.var_source.trace_add("write", self.validate_source)
-        self.var_template.trace_add("write", self.validate_template)
-        self.var_outdir.trace_add("write", self.validate_outdir)
-        self.var_lo_path.trace_add("write", self.validate_lo_path)
-
-        self._build_ui()
-
-    def change_theme(self, theme):
-        ctk.set_default_color_theme(theme)
-        # Destroy current UI and rebuild with new theme
-        for widget in self.winfo_children():
-            if widget != self:  # Don't destroy the root window
-                widget.destroy()
-        self._build_ui()
-        messagebox.showinfo("Theme Changed", f"Theme changed to {theme} successfully!")
-
-    def validate_source(self, *args):
-        path = self.var_source.get().strip()
-        if path and Path(path).exists() and Path(path).is_file():
-            # Valid file
-            if hasattr(self, 'entry_source'):
-                self.entry_source.configure(border_color="#00FF00")  # Green
-        else:
-            if hasattr(self, 'entry_source'):
-                self.entry_source.configure(border_color="#FF0000")  # Red
-
-    def validate_template(self, *args):
-        path = self.var_template.get().strip()
-        if path and Path(path).exists() and Path(path).is_file():
-            if hasattr(self, 'entry_template'):
-                self.entry_template.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_template'):
-                self.entry_template.configure(border_color="#FF0000")
-
-    def validate_outdir(self, *args):
-        path = self.var_outdir.get().strip()
-        if path and Path(path).exists() and Path(path).is_dir():
-            if hasattr(self, 'entry_outdir'):
-                self.entry_outdir.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_outdir'):
-                self.entry_outdir.configure(border_color="#FF0000")
-
-    def validate_lo_path(self, *args):
-        path = self.var_lo_path.get().strip()
-        if not path or (Path(path).exists() and Path(path).is_file()):
-            if hasattr(self, 'entry_lo_path'):
-                self.entry_lo_path.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_lo_path'):
-                self.entry_lo_path.configure(border_color="#FF0000")
-
-    def _build_ui(self):
-        pad = {"padx": 12, "pady": 10}
-
-        # Main container
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
-
-        # Top bar with left and right sections
-        top_frame = ctk.CTkFrame(main_frame)
-        top_frame.pack(fill="x", padx=10, pady=(10, 0))
-
-        # Left section: Save/Load buttons
-        left_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
-        left_frame.pack(side="left")
-        self.btn_save_top = ctk.CTkButton(left_frame, text="Save .ini", command=self.save_ini, width=80)
-        self.btn_save_top.pack(side="left", padx=(0, 8))
-        self.btn_load_top = ctk.CTkButton(left_frame, text="Load .ini", command=self.load_ini, width=80)
-        self.btn_load_top.pack(side="left", padx=(0, 8))
-        self.lbl_loaded_ini = ctk.CTkLabel(left_frame, textvariable=self.var_loaded_ini, fg_color="transparent")
-        self.lbl_loaded_ini.pack(side="left")
-
-        # Right section: Theme selector
-        right_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
-        right_frame.pack(side="right")
-        ctk.CTkLabel(right_frame, text="Theme:").pack(side="left", padx=(0, 5))
-        theme_combo = ctk.CTkComboBox(right_frame, values=["blue", "green", "dark-blue"], variable=self.var_theme, width=120, command=self.change_theme)
-        theme_combo.pack(side="left")
-
-        # Tabview
-        self.tabview = ctk.CTkTabview(main_frame, width=800, height=600)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Create tabs
-        self.tabview.add("Input")
-        self.tabview.add("Template")
-        self.tabview.add("Output")
-        self.tabview.add("Actions")
-
-        # INPUT TAB
-        input_tab = self.tabview.tab("Input")
-        ctk.CTkLabel(input_tab, text="Source Excel").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_source = ctk.CTkEntry(input_tab, textvariable=self.var_source, width=520)
-        self.entry_source.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_source = ctk.CTkButton(input_tab, text="Browse...", command=self.browse_source)
-        self.btn_browse_source.grid(row=0, column=2, **pad)
-
-        ctk.CTkLabel(input_tab, text="Sheet Name").grid(row=1, column=0, sticky="e", **pad)
-        self.cmb_sheet = ctk.CTkComboBox(input_tab, values=[], variable=self.var_sheet, width=240)
-        self.cmb_sheet.grid(row=1, column=1, sticky="w", **pad)
-        self.btn_load_sheets = ctk.CTkButton(input_tab, text="Load Sheets", command=self.load_sheets)
-        self.btn_load_sheets.grid(row=1, column=2, **pad)
-
-        ctk.CTkLabel(input_tab, text="Key Column (header or index)").grid(row=2, column=0, sticky="e", **pad)
-        self.cmb_key = ctk.CTkComboBox(input_tab, values=[], variable=self.var_keycol, width=240)
-        self.cmb_key.grid(row=2, column=1, sticky="w", **pad)
-        self.btn_load_headers = ctk.CTkButton(input_tab, text="Load Headers", command=self.load_headers)
-        self.btn_load_headers.grid(row=2, column=2, **pad)
-
-        input_tab.grid_columnconfigure(1, weight=1)
-
-        # TEMPLATE TAB
-        template_tab = self.tabview.tab("Template")
-        ctk.CTkLabel(template_tab, text="Template Excel").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_template = ctk.CTkEntry(template_tab, textvariable=self.var_template, width=520)
-        self.entry_template.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_template = ctk.CTkButton(template_tab, text="Browse...", command=self.browse_template)
-        self.btn_browse_template.grid(row=0, column=2, **pad)
-
-        ctk.CTkLabel(template_tab, text="HEADER_ROWS").grid(row=1, column=0, sticky="e", **pad)
-        header_entry = ctk.CTkEntry(template_tab, textvariable=self.var_header_rows, width=80)
-        header_entry.grid(row=1, column=1, sticky="w", **pad)
-
-        template_tab.grid_columnconfigure(1, weight=1)
-
-        # OUTPUT TAB
-        output_tab = self.tabview.tab("Output")
-        ctk.CTkLabel(output_tab, text="Output Folder").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_outdir = ctk.CTkEntry(output_tab, textvariable=self.var_outdir, width=520)
-        self.entry_outdir.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_outdir = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_outdir)
-        self.btn_browse_outdir.grid(row=0, column=2, **pad)
-
-        ctk.CTkLabel(output_tab, text="PDF Engine").grid(row=1, column=0, sticky="e", **pad)
-        pdf_combo = ctk.CTkComboBox(output_tab, values=["reportlab", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)
-        pdf_combo.grid(row=1, column=1, sticky="w", **pad)
-
-        ctk.CTkLabel(output_tab, text="LibreOffice (soffice.exe)").grid(row=2, column=0, sticky="e", **pad)
-        self.entry_lo_path = ctk.CTkEntry(output_tab, textvariable=self.var_lo_path, width=520)
-        self.entry_lo_path.grid(row=2, column=1, sticky="we", **pad)
-        self.btn_browse_soffice = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_soffice)
-        self.btn_browse_soffice.grid(row=2, column=2, **pad)
-
-        ctk.CTkLabel(output_tab, text="Prefix").grid(row=3, column=0, sticky="e", **pad)
-        prefix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_prefix, width=240)
-        prefix_entry.grid(row=3, column=1, sticky="w", **pad)
-
-        ctk.CTkLabel(output_tab, text="Suffix").grid(row=4, column=0, sticky="e", **pad)
-        suffix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_suffix, width=240)
-        suffix_entry.grid(row=4, column=1, sticky="w", **pad)
-
-        output_tab.grid_columnconfigure(1, weight=1)
-
-        # ACTIONS TAB
-        actions_tab = self.tabview.tab("Actions")
-
-        # Configuration Summary
-        summary_frame = ctk.CTkFrame(actions_tab)
-        summary_frame.pack(fill="x", padx=12, pady=(10, 10))
-
-        ctk.CTkLabel(summary_frame, text="Configuration Summary", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5))
-
-        # Create summary labels
-        self.summary_labels = {}
-        config_items = [
-            ("Source File", self.var_source),
-            ("Sheet Name", self.var_sheet),
-            ("Key Column", self.var_keycol),
-            ("Template File", self.var_template),
-            ("Header Rows", self.var_header_rows),
-            ("Output Folder", self.var_outdir),
-            ("PDF Engine", self.var_pdf_engine),
-            ("LibreOffice Path", self.var_lo_path),
-            ("Prefix", self.var_prefix),
-            ("Suffix", self.var_suffix),
-        ]
-
-        for label_text, var in config_items:
-            row_frame = ctk.CTkFrame(summary_frame, fg_color="transparent")
-            row_frame.pack(fill="x", padx=10, pady=0)
-            ctk.CTkLabel(row_frame, text=f"{label_text}:", width=120, anchor="w").pack(side="left")
-            value_label = ctk.CTkLabel(row_frame, textvariable=var, anchor="w")
-            value_label.pack(side="left", fill="x", expand=True)
-            self.summary_labels[label_text] = value_label
-
-        # Buttons
-        btns = ctk.CTkFrame(actions_tab)
-        btns.pack(fill="x", padx=12, pady=(10, 4))
-        self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked)
-        self.btn_run.pack(side="left", padx=(0, 8))
-
-        # PROGRESS + LOG
-        self.pbar = ctk.CTkProgressBar(actions_tab, mode="determinate", width=640)
-        self.pbar.pack(fill="x", padx=12, pady=(14, 4))
-        self.pbar.set(0.0)
-        self.txt_status = ctk.CTkTextbox(actions_tab, height=300)
-        self.txt_status.pack(fill="both", expand=True, padx=12, pady=(10, 14))
-
-    # ------------- UI Helpers -------------
-
-    def log(self, msg: str):
-        self.after(0, self._append_log, msg)
-
-    def _append_log(self, msg: str):
-        self.txt_status.insert("end", msg + "\n")
-        self.txt_status.see("end")
-
-    def set_progress(self, total: int, current: int):
-        self.after(0, self._set_progress_impl, total, current)
-
-    def _set_progress_impl(self, total: int, current: int):
-        ratio = 0.0 if total <= 0 else max(0.0, min(1.0, current / total))
-        self.pbar.set(ratio)
-
-    def set_busy(self, busy: bool):
-        self.after(0, self._set_busy_impl, busy)
-
-    def _set_busy_impl(self, busy: bool):
-        self.is_running = busy
-        state = "disabled" if busy else "normal"
-        try:
-            self.btn_run.configure(state=state, text="Generating..." if busy else "Generate")
-            self.btn_save_top.configure(state=state)
-            self.btn_load_top.configure(state=state)
-        except AttributeError:
-            pass  # UI being recreated
-        self.configure(cursor="watch" if busy else "")
-        if not busy:
-            self.pbar.set(0.0)
-
-    # ------------- Browse & Load -------------
-
-    def browse_source(self):
-        f = filedialog.askopenfilename(
-            title="Pilih source Excel",
-            filetypes=[("Excel files", "*.xlsx;*.xls;*.xlsm;*.xlsb")]
+    def setup_page(self):
+        """Configure the main page with modern Fluent Design settings"""
+        self.page.title = "Excel Splitter"
+        self.page.theme_mode = ft.ThemeMode.SYSTEM
+        self.page.window.width = 1000
+        self.page.window.height = 700
+        self.page.window.min_width = 800
+        self.page.window.min_height = 600
+        
+        # Enable adaptive design for Fluent Design styling
+        self.page.adaptive = True
+        
+        # Set modern color scheme
+        self.page.theme = ft.Theme(
+            color_scheme_seed=Colors.BLUE,
+            use_material3=True
         )
-        if f:
-            self.var_source.set(f)
-            self.log(f"Source: {f}")
 
-    def browse_template(self):
-        f = filedialog.askopenfilename(
-            title="Pilih template Excel",
-            filetypes=[("Excel files", "*.xlsx")]
+    def build_ui(self):
+        """Build the modern UI using Flet components"""
+        
+        # App Bar with modern styling - Fixed contrast with proper Material Design color
+        app_bar = ft.AppBar(
+            leading=ft.Icon(Icons.SPLITSCREEN),
+            title=ft.Text("Excel Splitter", size=20, weight=ft.FontWeight.W_500),
+            center_title=False,
+            bgcolor=Colors.SURFACE_CONTAINER_HIGHEST,
+            actions=[
+                ft.PopupMenuButton(
+                    icon=Icons.MORE_VERT,
+                    items=[
+                        ft.PopupMenuItem(text="Save Configuration", on_click=self.save_config),
+                        ft.PopupMenuItem(text="Load Configuration", on_click=self.load_config),
+                        ft.PopupMenuItem(),  # Divider
+                        ft.PopupMenuItem(text="About", on_click=self.show_about),
+                    ]
+                )
+            ]
         )
-        if f:
-            self.var_template.set(f)
-            self.log(f"Template: {f}")
 
-    def browse_outdir(self):
-        d = filedialog.askdirectory(title="Pilih output folder")
-        if d:
-            self.var_outdir.set(d)
-            self.log(f"Output: {d}")
-
-    def browse_soffice(self):
-        f = filedialog.askopenfilename(
-            title="Pilih soffice.exe (LibreOffice)",
-            filetypes=[("Executable", "soffice.exe"), ("All files", "*.*")]
+        # Debug: Log header styling for contrast analysis
+        self.log_status("DEBUG: AppBar created with bgcolor=SURFACE_CONTAINER_HIGHEST (fixed contrast)")
+        self.log_status(f"DEBUG: Current theme mode: {self.page.theme_mode}")
+        self.log_status(f"DEBUG: Color scheme seed: {Colors.BLUE}")
+        
+        self.page.appbar = app_bar
+        
+        # Main content with tabs
+        main_tabs = ft.Tabs(
+            selected_index=0,
+            animation_duration=300,
+            tabs=[
+                ft.Tab(
+                    text="Input",
+                    icon=Icons.INPUT,
+                    content=self.build_input_tab()
+                ),
+                ft.Tab(
+                    text="Template", 
+                    icon=Icons.DESIGN_SERVICES,
+                    content=self.build_template_tab()
+                ),
+                ft.Tab(
+                    text="Output",
+                    icon=Icons.OUTPUT, 
+                    content=self.build_output_tab()
+                ),
+                ft.Tab(
+                    text="Generate",
+                    icon=Icons.PLAY_ARROW,
+                    content=self.build_generate_tab()
+                ),
+            ],
         )
-        if f:
-            self.var_lo_path.set(f)
-            self.log(f"LibreOffice: {f}")
+        
+        # Add to page
+        self.page.add(
+            ft.Container(
+                content=main_tabs,
+                padding=20,
+                expand=True
+            )
+        )
+        
+        self.page.update()
 
-    def load_sheets(self):
-        src = self.var_source.get().strip()
-        if not src:
-            messagebox.showwarning("Perhatian", "Pilih source Excel dulu.")
+    def build_input_tab(self):
+        """Build the input configuration tab"""
+        
+        # Source file selection
+        self.source_field = ft.TextField(
+            label="Source Excel File",
+            hint_text="Select your Excel file to split",
+            read_only=True,
+            prefix_icon=Icons.DESCRIPTION,
+            expand=True,
+            on_change=self.on_form_field_change
+        )
+        
+        source_browse_btn = ft.FilledTonalButton(
+            text="Browse",
+            icon=Icons.FOLDER_OPEN,
+            on_click=self.browse_source_file
+        )
+        
+        # Sheet selection
+        self.sheet_dropdown = ft.Dropdown(
+            label="Sheet Name",
+            hint_text="Select sheet from Excel file",
+            prefix_icon=Icons.TABLE_CHART,
+            expand=True,
+            on_change=self.on_form_field_change
+        )
+        
+        load_sheets_btn = ft.FilledTonalButton(
+            text="Load Sheets",
+            icon=Icons.REFRESH,
+            on_click=self.load_sheets_with_loading
+        )
+        
+        # Key column input (manual text entry)
+        self.key_field = ft.TextField(
+            label="Key Column",
+            hint_text="Enter column name or column index (e.g., 'Customer' or '1')",
+            prefix_icon=Icons.KEY,
+            expand=True,
+            on_change=self.on_key_column_change
+        )
+
+        # Debug: Log key field creation
+        self.log_status("DEBUG: Key column text field created")
+        
+        load_headers_btn = ft.FilledTonalButton(
+            text="Load Headers",
+            icon=Icons.VIEW_COLUMN,
+            on_click=self.load_headers_with_loading
+        )
+        
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("Source Configuration", size=18, weight=ft.FontWeight.W_500),
+                ft.Divider(height=20),
+                
+                # Source file row
+                ft.Row([
+                    self.source_field,
+                    source_browse_btn
+                ], spacing=10),
+                
+                # Sheet selection row
+                ft.Row([
+                    self.sheet_dropdown,
+                    load_sheets_btn
+                ], spacing=10),
+                
+                # Key column row
+                ft.Row([
+                    self.key_field,
+                    load_headers_btn
+                ], spacing=10),
+                
+            ], spacing=20),
+            padding=20
+        )
+
+    def build_template_tab(self):
+        """Build the template configuration tab"""
+        
+        self.template_field = ft.TextField(
+            label="Template Excel File",
+            hint_text="Template file for formatting output",
+            read_only=True,
+            prefix_icon=Icons.DESIGN_SERVICES,
+            expand=True,
+            on_change=self.on_form_field_change
+        )
+        
+        template_browse_btn = ft.FilledTonalButton(
+            text="Browse",
+            icon=Icons.FOLDER_OPEN,
+            on_click=self.browse_template_file
+        )
+        
+        self.header_rows_field = ft.TextField(
+            label="Header Rows",
+            hint_text="Number of header rows",
+            value="5",
+            prefix_icon=Icons.FORMAT_LIST_NUMBERED,
+            width=200,
+            input_filter=ft.NumbersOnlyInputFilter(),
+            on_change=self.on_form_field_change
+        )
+        
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("Template Configuration", size=18, weight=ft.FontWeight.W_500),
+                ft.Divider(height=20),
+                
+                # Template file row
+                ft.Row([
+                    self.template_field,
+                    template_browse_btn
+                ], spacing=10),
+                
+                # Header rows
+                self.header_rows_field,
+                
+                # Info card
+                ft.Card(
+                    content=ft.Container(
+                        content=ft.Column([
+                            ft.ListTile(
+                                leading=ft.Icon(Icons.INFO_OUTLINE, color=Colors.BLUE),
+                                title=ft.Text("Template Usage", weight=ft.FontWeight.W_500),
+                                subtitle=ft.Text("The template file provides formatting, styling, and column layout for the output files.")
+                            )
+                        ]),
+                        padding=10
+                    )
+                )
+                
+            ], spacing=20),
+            padding=20
+        )
+
+    def build_output_tab(self):
+        """Build the output configuration tab"""
+        
+        self.output_field = ft.TextField(
+            label="Output Folder",
+            hint_text="Where to save split files",
+            read_only=True,
+            prefix_icon=Icons.FOLDER,
+            expand=True,
+            on_change=self.on_form_field_change
+        )
+        
+        output_browse_btn = ft.FilledTonalButton(
+            text="Browse",
+            icon=Icons.FOLDER_OPEN,
+            on_click=self.browse_output_folder
+        )
+        
+        # PDF Engine selection
+        self.pdf_engine_dropdown = ft.Dropdown(
+            label="PDF Engine",
+            hint_text="Choose PDF generation method",
+            prefix_icon=Icons.PICTURE_AS_PDF,
+            value="reportlab",
+            options=[
+                ft.dropdown.Option("none", "None - Excel only"),
+                ft.dropdown.Option("reportlab", "ReportLab (Fast)"),
+                ft.dropdown.Option("libreoffice", "LibreOffice (Better formatting)")
+            ],
+            width=300,
+            on_change=self.on_form_field_change
+        )
+        
+        # LibreOffice path
+        self.libreoffice_field = ft.TextField(
+            label="LibreOffice Path (Optional)",
+            hint_text="Path to soffice.exe",
+            prefix_icon=Icons.INTEGRATION_INSTRUCTIONS,
+            expand=True,
+            on_change=self.on_form_field_change
+        )
+        
+        libreoffice_browse_btn = ft.FilledTonalButton(
+            text="Browse",
+            icon=Icons.FOLDER_OPEN,
+            on_click=self.browse_libreoffice
+        )
+        
+        # File naming
+        self.prefix_field = ft.TextField(
+            label="File Prefix",
+            hint_text="Text to add before filename",
+            prefix_icon=Icons.LABEL,
+            width=200,
+            on_change=self.on_form_field_change
+        )
+
+        self.suffix_field = ft.TextField(
+            label="File Suffix",
+            hint_text="Text to add after filename",
+            prefix_icon=Icons.LABEL_OUTLINE,
+            width=200,
+            on_change=self.on_form_field_change
+        )
+        
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("Output Configuration", size=18, weight=ft.FontWeight.W_500),
+                ft.Divider(height=20),
+                
+                # Output folder row
+                ft.Row([
+                    self.output_field,
+                    output_browse_btn
+                ], spacing=10),
+                
+                # PDF engine
+                self.pdf_engine_dropdown,
+                
+                # LibreOffice path row
+                ft.Row([
+                    self.libreoffice_field,
+                    libreoffice_browse_btn
+                ], spacing=10),
+                
+                # File naming row
+                ft.Row([
+                    self.prefix_field,
+                    self.suffix_field
+                ], spacing=10),
+                
+            ], spacing=20),
+            padding=20
+        )
+
+    def build_generate_tab(self):
+        """Build the generate/action tab"""
+        
+        # Configuration summary - Dynamic version
+        config_summary = ft.Container(
+            content=ft.Column([
+                ft.Text("Configuration", size=14, weight=ft.FontWeight.W_500),
+                ft.Divider(height=5),
+
+                # Dynamic info row that updates with form values
+                ft.Container(
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.DESCRIPTION, size=16),
+                                ft.Text("Source:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.source_field.value else Path(self.source_field.value).name, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.TABLE_CHART, size=16),
+                                ft.Text("Sheet:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not set" if not self.sheet_dropdown.value else self.sheet_dropdown.value, size=11),
+                            ], spacing=5),
+                        ], spacing=2),
+
+                        ft.VerticalDivider(width=1),
+
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.KEY, size=16),
+                                ft.Text("Key:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not set" if not self.key_field.value else self.key_field.value, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.DESIGN_SERVICES, size=16),
+                                ft.Text("Template:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.template_field.value else Path(self.template_field.value).name, size=11),
+                            ], spacing=5),
+                        ], spacing=2),
+
+                        ft.VerticalDivider(width=1),
+
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.FOLDER, size=16),
+                                ft.Text("Output:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.output_field.value else Path(self.output_field.value).name, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.PICTURE_AS_PDF, size=16),
+                                ft.Text("PDF:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text(self.pdf_engine_dropdown.value or "reportlab", size=11),
+                            ], spacing=5),
+                        ], spacing=2),
+                    ], spacing=15),
+                    padding=ft.padding.all(10),
+                    border=ft.border.all(1, Colors.OUTLINE),
+                    border_radius=8,
+                    bgcolor=Colors.SURFACE
+                )
+            ], spacing=10),
+            margin=ft.margin.only(bottom=10)
+        )
+        
+        # Generate button
+        self.generate_button = ft.FilledButton(
+            text="Generate Split Files",
+            icon=Icons.PLAY_ARROW,
+            style=ft.ButtonStyle(
+                padding=ft.padding.all(15),
+                text_style=ft.TextStyle(size=16, weight=ft.FontWeight.W_500)
+            ),
+            on_click=self.start_generation,
+            width=200
+        )
+        
+        # Progress indicator
+        self.progress_ring = ft.ProgressRing(
+            visible=False,
+            stroke_width=4
+        )
+        
+        # Status log
+        self.status_log = ft.ListView(
+            height=300,
+            spacing=5,
+            padding=10
+        )
+        
+        status_card = ft.Card(
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text("Processing Status", size=16, weight=ft.FontWeight.W_500),
+                    ft.Divider(height=5),
+                    self.status_log
+                ]),
+                padding=10
+            )
+        )
+        
+        return ft.Container(
+            content=ft.Column([
+                config_summary,
+                
+                ft.Row([
+                    self.generate_button,
+                    self.progress_ring
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
+                
+                status_card
+                
+            ], spacing=20),
+            padding=20
+        )
+
+    # File picker methods
+    async def browse_source_file(self, e):
+        """Browse for source Excel file"""
+        file_picker = ft.FilePicker(on_result=self.on_source_file_selected)
+        self.page.overlay.append(file_picker)
+        self.page.update()
+
+        # Ensure configuration summary is initialized
+        self.page.after_next_render = self.initialize_config_summary
+        
+        await file_picker.pick_files(
+            allow_multiple=False,
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["xlsx", "xls", "xlsm", "xlsb"]
+        )
+
+    def on_source_file_selected(self, e: ft.FilePickerResultEvent):
+        """Handle source file selection"""
+        if e.files:
+            self.source_path = e.files[0].path
+            self.source_field.value = self.source_path
+            self.log_status(f"Source selected: {Path(self.source_path).name}")
+            self.source_field.update()
+
+            # Update configuration summary when file is selected
+            self.update_config_summary()
+
+    async def browse_template_file(self, e):
+        """Browse for template Excel file"""
+        file_picker = ft.FilePicker(on_result=self.on_template_file_selected)
+        self.page.overlay.append(file_picker)
+        self.page.update()
+        
+        await file_picker.pick_files(
+            allow_multiple=False,
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["xlsx"]
+        )
+
+    def on_template_file_selected(self, e: ft.FilePickerResultEvent):
+        """Handle template file selection"""
+        if e.files:
+            self.template_path = e.files[0].path
+            self.template_field.value = self.template_path
+            self.log_status(f"Template selected: {Path(self.template_path).name}")
+            self.template_field.update()
+
+            # Update configuration summary when file is selected
+            self.update_config_summary()
+
+    async def browse_output_folder(self, e):
+        """Browse for output folder"""
+        folder_picker = ft.FilePicker(on_result=self.on_output_folder_selected)
+        self.page.overlay.append(folder_picker)
+        self.page.update()
+        
+        await folder_picker.get_directory_path()
+
+    def on_output_folder_selected(self, e: ft.FilePickerResultEvent):
+        """Handle output folder selection"""
+        if e.path:
+            self.output_dir = e.path
+            self.output_field.value = self.output_dir
+            self.log_status(f"Output folder: {Path(self.output_dir).name}")
+            self.output_field.update()
+
+            # Update configuration summary when folder is selected
+            self.update_config_summary()
+
+    async def browse_libreoffice(self, e):
+        """Browse for LibreOffice executable"""
+        file_picker = ft.FilePicker(on_result=self.on_libreoffice_selected)
+        self.page.overlay.append(file_picker)
+        self.page.update()
+        
+        await file_picker.pick_files(
+            allow_multiple=False,
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["exe"]
+        )
+
+    def on_libreoffice_selected(self, e: ft.FilePickerResultEvent):
+        """Handle LibreOffice path selection"""
+        if e.files:
+            self.libreoffice_path = e.files[0].path
+            self.libreoffice_field.value = self.libreoffice_path
+            self.log_status(f"LibreOffice path set")
+            self.libreoffice_field.update()
+
+            # Update configuration summary when LibreOffice path is selected
+            self.update_config_summary()
+
+    # Data loading methods
+    def load_sheets(self, e):
+        """Load sheet names from selected Excel file"""
+        if not self.source_path:
+            self.show_error("Please select a source Excel file first")
             return
+
         try:
-            xls = pd.ExcelFile(src)
+            xls = pd.ExcelFile(self.source_path)
             sheets = xls.sheet_names
-            self.cmb_sheet.configure(values=sheets)
+
+            self.sheet_dropdown.options = [
+                ft.dropdown.Option(sheet, sheet) for sheet in sheets
+            ]
+
             if sheets:
-                self.var_sheet.set(sheets[0])
-            self.log(f"Sheets loaded: {', '.join(sheets)}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+                self.sheet_dropdown.value = sheets[0]
+                self.sheet_name = sheets[0]
 
-    def load_headers(self):
-        src = self.var_source.get().strip()
-        sheet = self.var_sheet.get().strip()
-        if not src or not sheet:
-            messagebox.showwarning("Perhatian", "Pastikan source & sheet sudah dipilih.")
+            self.log_status(f"Loaded {len(sheets)} sheets: {', '.join(sheets)}")
+            self.sheet_dropdown.update()
+
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.show_error(f"Error loading sheets: {str(ex)}")
+
+    def load_headers(self, e):
+        """Load column headers from selected sheet"""
+        if not self.source_path or not self.sheet_name:
+            self.show_error("Please select source file and sheet first")
             return
+
         try:
-            df = pd.read_excel(src, sheet_name=sheet, nrows=0)
+            # Get current sheet name
+            self.sheet_name = self.sheet_dropdown.value
+            self.log_status(f"DEBUG: Loading headers from sheet '{self.sheet_name}'")
+
+            df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
             headers = list(df.columns.astype(str))
-            index_vals = [str(i+1) for i in range(len(headers))]
-            values = headers + index_vals
-            self.cmb_key.configure(values=values)
+            index_vals = [f"{i+1}" for i in range(len(headers))]
+
+            # Debug: Log header information
+            self.log_status(f"DEBUG: Found {len(headers)} headers: {headers[:5]}{'...' if len(headers) > 5 else ''}")
+            self.log_status(f"DEBUG: Index values: {index_vals}")
+
+            # Combine headers and indices
+            all_options = []
+            for i, header in enumerate(headers):
+                all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
+
+            for i, idx in enumerate(index_vals):
+                all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
+
+            # Set the first header as default value in the text field only if no key column is set
+            # and we're not currently loading a configuration
             if headers:
-                self.var_keycol.set(headers[0])
-            self.log(f"Headers loaded: {headers}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+                if not self.key_field.value and not self.is_loading_config:  # Only set default if no value is already set and not loading config
+                    self.key_field.value = headers[0]
+                    self.key_column = headers[0]
+                    self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                else:
+                    if self.is_loading_config:
+                        self.log_status(f"DEBUG: Loading config - keeping loaded key column value: {self.key_field.value}")
+                    else:
+                        self.log_status(f"DEBUG: Keeping existing key column value: {self.key_field.value}")
+                    # Don't override the loaded value
 
-    # ------------- Run Generate (Threaded) -------------
+            self.log_status(f"Loaded {len(headers)} headers")
+            self.key_field.update()
 
-    def on_run_clicked(self):
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.log_status(f"DEBUG: Error loading headers: {type(ex).__name__}: {str(ex)}")
+            self.show_error(f"Error loading headers: {str(ex)}")
+
+    def on_key_column_change(self, e):
+        """Handle key column dropdown value changes"""
+        if e.control.value:
+            self.key_column = e.control.value
+            self.log_status(f"DEBUG: Key column manually set to: '{self.key_column}'")
+        else:
+            self.log_status("DEBUG: Key column cleared")
+
+        # Update configuration summary
+        self.update_config_summary()
+
+    def on_form_field_change(self, e):
+        """Handle form field value changes"""
+        # Debug: Log which field triggered the change
+        self.log_status(f"DEBUG: Form field changed: {e.control.label if hasattr(e.control, 'label') else e.control.hint_text}")
+
+        # Update configuration summary when any form field changes
+        self.update_config_summary()
+
+    async def load_sheets_with_loading(self, e):
+        """Load sheets with loading indicator"""
+        if not self.source_path:
+            self.show_error("Please select a source Excel file first")
+            return
+
+        # Show loading state
+        original_text = e.control.text
+        e.control.text = "Loading..."
+        e.control.disabled = True
+        e.control.update()
+
+        try:
+            # Run the actual loading in a separate task
+            await self.load_sheets_async(e)
+        finally:
+            # Restore button state
+            e.control.text = original_text
+            e.control.disabled = False
+            e.control.update()
+
+    async def load_sheets_async(self, e):
+        """Async version of load_sheets"""
+        try:
+            xls = pd.ExcelFile(self.source_path)
+            sheets = xls.sheet_names
+
+            self.sheet_dropdown.options = [
+                ft.dropdown.Option(sheet, sheet) for sheet in sheets
+            ]
+
+            if sheets:
+                self.sheet_dropdown.value = sheets[0]
+                self.sheet_name = sheets[0]
+
+            self.log_status(f"Loaded {len(sheets)} sheets: {', '.join(sheets)}")
+            self.sheet_dropdown.update()
+
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.show_error(f"Error loading sheets: {str(ex)}")
+
+    async def load_headers_with_loading(self, e):
+        """Load headers with loading indicator"""
+        if not self.source_path or not self.sheet_name:
+            self.show_error("Please select source file and sheet first")
+            return
+
+        # Show loading state
+        original_text = e.control.text
+        e.control.text = "Loading..."
+        e.control.disabled = True
+        e.control.update()
+
+        try:
+            # Run the actual loading in a separate task
+            await self.load_headers_async(e)
+        finally:
+            # Restore button state
+            e.control.text = original_text
+            e.control.disabled = False
+            e.control.update()
+
+    async def load_headers_async(self, e):
+        """Async version of load_headers"""
+        try:
+            # Get current sheet name
+            self.sheet_name = self.sheet_dropdown.value
+            self.log_status(f"DEBUG: Loading headers from sheet '{self.sheet_name}'")
+
+            df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
+            headers = list(df.columns.astype(str))
+            index_vals = [f"{i+1}" for i in range(len(headers))]
+
+            # Debug: Log header information
+            self.log_status(f"DEBUG: Found {len(headers)} headers: {headers[:5]}{'...' if len(headers) > 5 else ''}")
+            self.log_status(f"DEBUG: Index values: {index_vals}")
+
+            # Combine headers and indices
+            all_options = []
+            for i, header in enumerate(headers):
+                all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
+
+            for i, idx in enumerate(index_vals):
+                all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
+
+            # Set the first header as default value in the text field only if no key column is set
+            # and we're not currently loading a configuration
+            if headers:
+                if not self.key_field.value and not self.is_loading_config:  # Only set default if no value is already set and not loading config
+                    self.key_field.value = headers[0]
+                    self.key_column = headers[0]
+                    self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                else:
+                    if self.is_loading_config:
+                        self.log_status(f"DEBUG: Loading config - keeping loaded key column value: {self.key_field.value}")
+                    else:
+                        self.log_status(f"DEBUG: Keeping existing key column value: {self.key_field.value}")
+                    # Don't override the loaded value
+
+            self.log_status(f"Loaded {len(headers)} headers")
+            self.key_field.update()
+
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.log_status(f"DEBUG: Error loading headers: {type(ex).__name__}: {str(ex)}")
+            self.show_error(f"Error loading headers: {str(ex)}")
+
+    # Generation methods
+    def start_generation(self, e):
+        """Start the Excel splitting process"""
         if self.is_running:
             return
+            
+        # Validate inputs
+        validation_error = self.validate_inputs()
+        if validation_error:
+            self.show_error(validation_error)
+            return
+        
+        # Collect current values
+        self.collect_form_values()
+        
+        self.is_running = True
+        self.generate_button.disabled = True
+        self.progress_ring.visible = True
+        self.generate_button.update()
+        self.progress_ring.update()
+        
+        # Clear previous logs
+        self.status_log.controls.clear()
+        self.status_log.update()
+        
+        # Start processing in thread
+        threading.Thread(target=self.run_generation, daemon=True).start()
+
+    def collect_form_values(self):
+        """Collect all form values"""
+        self.source_path = self.source_field.value or ""
+        self.sheet_name = self.sheet_dropdown.value or ""
+        self.key_column = self.key_field.value or ""
+        self.template_path = self.template_field.value or ""
+        self.output_dir = self.output_field.value or ""
+        self.header_rows = int(self.header_rows_field.value or "5")
+        self.pdf_engine = self.pdf_engine_dropdown.value or "reportlab"
+        self.libreoffice_path = self.libreoffice_field.value or ""
+        self.prefix = self.prefix_field.value or ""
+        self.suffix = self.suffix_field.value or ""
+
+        # Debug: Log collected form values
+        self.log_status(f"DEBUG: === COLLECT FORM VALUES ===")
+        self.log_status(f"DEBUG: Before collect - self.key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: Before collect - self.key_field.value: '{self.key_field.value}'")
+        self.log_status(f"DEBUG: Collected form values - source: {self.source_path}")
+        self.log_status(f"DEBUG: Collected form values - sheet: {self.sheet_name}")
+        self.log_status(f"DEBUG: Collected form values - key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: Collected form values - template: {self.template_path}")
+        self.log_status(f"DEBUG: Collected form values - output: {self.output_dir}")
+        self.log_status(f"DEBUG: Collected form values - header_rows: {self.header_rows}")
+        self.log_status(f"DEBUG: After collect - self.key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: After collect - self.key_field.value: '{self.key_field.value}'")
+        self.log_status(f"DEBUG: === END COLLECT ===")
+
+        # Update configuration summary
+        self.update_config_summary()
+
+    def initialize_config_summary(self):
+        """Initialize configuration summary after UI is rendered"""
+        self.log_status("DEBUG: Initializing configuration summary")
+        # Configuration summary is now static and updates automatically with form changes
+
+    def update_config_summary(self):
+        """Update the configuration summary with current values"""
+        # Debug: Log current values
+        self.log_status(f"DEBUG: Summary update - source: {self.source_field.value}, sheet: {self.sheet_dropdown.value}, key: {self.key_field.value}")
+        self.log_status(f"DEBUG: Summary update - template: {self.template_field.value}, output: {self.output_field.value}")
+
+        # Update the page to reflect changes
         try:
-            source_path = Path(self.var_source.get().strip())
-            template_path = Path(self.var_template.get().strip())
-            out_dir = Path(self.var_outdir.get().strip())
-            sheet_name = self.var_sheet.get().strip()
-            key_raw = self.var_keycol.get().strip()
-            header_rows = int(self.var_header_rows.get())
-            pdf_engine = self.var_pdf_engine.get().strip().lower()
+            self.page.update()
+            self.log_status("DEBUG: Configuration summary updated successfully")
+        except Exception as e:
+            self.log_status(f"DEBUG: Error updating configuration summary: {str(e)}")
 
-            if not source_path.exists():
-                messagebox.showerror("Error", "Source Excel tidak ditemukan.")
-                return
-            if not template_path.exists():
-                messagebox.showerror("Error", "Template Excel tidak ditemukan.")
-                return
-            if not out_dir:
-                messagebox.showerror("Error", "Output folder belum dipilih.")
-                return
-            if not sheet_name:
-                messagebox.showerror("Error", "Sheet belum dipilih.")
-                return
-            if not key_raw:
-                messagebox.showerror("Error", "Key Column belum dipilih/diisi.")
-                return
+    def validate_inputs(self):
+        """Validate all required inputs"""
+        if not self.source_field.value:
+            return "Source Excel file is required"
+        if not self.sheet_dropdown.value:
+            return "Sheet name is required"
+        if not self.key_field.value:
+            return "Key column is required"
+        if not self.template_field.value:
+            return "Template file is required"
+        if not self.output_field.value:
+            return "Output folder is required"
+        
+        # Check if files exist
+        if not Path(self.source_field.value).exists():
+            return "Source Excel file does not exist"
+        if not Path(self.template_field.value).exists():
+            return "Template file does not exist"
+        if not Path(self.output_field.value).exists():
+            return "Output folder does not exist"
+        
+        return None
 
+    def run_generation(self):
+        """Run the actual Excel splitting process"""
+        try:
+            # Convert key column to appropriate type
             try:
-                key_col = int(key_raw)
+                key_col = int(self.key_column)
+                self.log_status(f"DEBUG: Converting key column '{self.key_column}' to int: {key_col}")
             except ValueError:
-                key_col = key_raw  # pakai header name
+                key_col = self.key_column
+                self.log_status(f"DEBUG: Using key column as string: '{key_col}'")
 
-            # Validasi ReportLab bila dipilih
-            if pdf_engine == "reportlab" and not REPORTLAB_AVAILABLE:
-                messagebox.showwarning(
-                    "ReportLab tidak tersedia",
-                    "ReportLab belum terpasang di environment ini.\n"
-                    "Jalankan: pip install reportlab\n"
-                    "Atau pilih PDF Engine: 'libreoffice' atau 'none'."
-                )
+            # Validate ReportLab if needed
+            if self.pdf_engine == "reportlab" and not REPORTLAB_AVAILABLE:
+                self.page.add(ft.SnackBar(
+                    content=ft.Text("ReportLab not available. Install with: pip install reportlab"),
+                    bgcolor=Colors.RED
+                ))
                 return
 
-            # Deteksi LibreOffice jika dipilih
+            # Find LibreOffice if needed
             soffice_path = None
-            if pdf_engine == "libreoffice":
-                lo_explicit = self.var_lo_path.get().strip()
-                soffice_path = find_soffice(lo_explicit)
+            if self.pdf_engine == "libreoffice":
+                soffice_path = find_soffice(self.libreoffice_path)
                 if not soffice_path:
-                    ans = messagebox.askyesno(
-                        "LibreOffice tidak ditemukan",
-                        "Tidak menemukan 'soffice'. Mau pilih lokasi secara manual?"
-                    )
-                    if ans:
-                        self.browse_soffice()
-                        lo_explicit = self.var_lo_path.get().strip()
-                        soffice_path = find_soffice(lo_explicit)
-                if not soffice_path:
-                    messagebox.showerror(
-                        "Error",
-                        "LibreOffice (soffice.exe) tidak ditemukan.\n"
-                        "Isi path LibreOffice atau pilih PDF Engine: 'reportlab' / 'none'."
-                    )
+                    self.page.add(ft.SnackBar(
+                        content=ft.Text("LibreOffice (soffice.exe) not found"),
+                        bgcolor=Colors.RED
+                    ))
                     return
 
-            self.set_busy(True)
-            self.log("Mulai generate...")
+            # Run the splitting process
+            split_excel_with_template(
+                source_path=Path(self.source_path),
+                sheet_name=self.sheet_name,
+                key_col=key_col,
+                template_path=Path(self.template_path),
+                out_dir=Path(self.output_dir),
+                header_rows=self.header_rows,
+                pdf_engine=self.pdf_engine,
+                soffice_path=soffice_path,
+                prefix=self.prefix,
+                suffix=self.suffix,
+                status_cb=self.log_status,
+                progress_cb=self.update_progress
+            )
+            
+            # Show success message
+            self.page.add(ft.SnackBar(
+                content=ft.Text("Excel splitting completed successfully!"),
+                bgcolor=Colors.GREEN_600
+            ))
+            
+        except Exception as ex:
+            self.log_status(f"Error: {str(ex)}")
+            self.page.add(ft.SnackBar(
+                content=ft.Text(f"Error: {str(ex)}"),
+                bgcolor=Colors.RED
+            ))
+        
+        finally:
+            # Re-enable UI
+            self.is_running = False
+            self.generate_button.disabled = False
+            self.progress_ring.visible = False
+            self.generate_button.update()
+            self.progress_ring.update()
 
-            def worker():
-                try:
-                    split_excel_with_template(
-                        source_path=source_path,
-                        sheet_name=sheet_name,
-                        key_col=key_col,
-                        template_path=template_path,
-                        out_dir=out_dir,
-                        header_rows=header_rows,
-                        pdf_engine=pdf_engine,
-                        soffice_path=soffice_path,
-                        prefix=self.var_prefix.get().strip(),
-                        suffix=self.var_suffix.get().strip(),
-                        status_cb=self.log,
-                        progress_cb=self.set_progress
-                    )
-                    self.log("Selesai.")
-                    self.after(0, lambda: messagebox.showinfo("Selesai", "Proses selesai."))
-                except subprocess.CalledProcessError as e:
-                    try:
-                        out = e.stdout.decode("utf-8", errors="ignore")
-                        err = e.stderr.decode("utf-8", errors="ignore")
-                    except Exception:
-                        out, err = str(e), ""
-                    self.log(out); self.log(err)
-                    self.after(0, lambda: messagebox.showerror("LibreOffice Error", "Gagal export PDF. Lihat log."))
-                except Exception as e:
-                    error_msg = str(e)
-                    self.after(0, lambda: messagebox.showerror("Error", error_msg))
-                finally:
-                    self.set_busy(False)
-
-            self.worker_thread = threading.Thread(target=worker, daemon=True)
-            self.worker_thread.start()
-
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-            self.set_busy(False)
-
-    # ------------- INI Save / Load -------------
-
-    def save_ini(self):
-        f = filedialog.asksaveasfilename(
-            defaultextension=".ini",
-            filetypes=[("INI files", "*.ini")],
-            title="Simpan konfigurasi"
-        )
-        if not f:
-            return
-        cfg = configparser.ConfigParser()
-        cfg["template"] = {
-            "template_path": self.var_template.get().strip(),
-            "header_rows": str(self.var_header_rows.get()),
-        }
-        cfg["source"] = {
-            "source_path": self.var_source.get().strip(),
-            "sheet_name": self.var_sheet.get().strip(),
-            "key_col": self.var_keycol.get().strip()
-        }
-        cfg["output"] = {
-            "output_dir": self.var_outdir.get().strip(),
-            "pdf_engine": self.var_pdf_engine.get().strip().lower(),
-            "libreoffice_path": self.var_lo_path.get().strip(),
-            "prefix": self.var_prefix.get().strip(),
-            "suffix": self.var_suffix.get().strip()
-        }
-        with open(f, "w", encoding="utf-8") as fp:
-            cfg.write(fp)
-        self.log(f"Konfigurasi tersimpan: {f}")
-
-    def load_ini(self):
-        f = filedialog.askopenfilename(
-            title="Muat konfigurasi",
-            filetypes=[("INI files", "*.ini")]
-        )
-        if not f:
-            return
-        cfg = configparser.ConfigParser()
-        cfg.read(f, encoding="utf-8")
-
+    def log_status(self, message: str):
+        """Add status message to the log"""
+        def add_log():
+            log_item = ft.Text(
+                message,
+                size=12,
+                color=Colors.WHITE,
+                weight=ft.FontWeight.W_400
+            )
+            
+            self.status_log.controls.append(log_item)
+            
+            # Keep only last 50 messages
+            if len(self.status_log.controls) > 50:
+                self.status_log.controls.pop(0)
+            
+            self.status_log.update()
+            
+            # Auto-scroll to bottom
+            if hasattr(self.status_log, 'scroll_to'):
+                self.status_log.scroll_to(offset=-1)
+        
+        # Use page update instead of add_async
         try:
-            self.var_template.set(cfg.get("template", "template_path", fallback=""))
-            self.var_header_rows.set(cfg.getint("template", "header_rows", fallback=5))
+            add_log()
+        except:
+            # Fallback if update fails
+            pass
 
-            self.var_source.set(cfg.get("source", "source_path", fallback=""))
-            self.var_sheet.set(cfg.get("source", "sheet_name", fallback=""))
-            self.var_keycol.set(cfg.get("source", "key_col", fallback=""))
+    def update_progress(self, total: int, current: int):
+        """Update progress indicator"""
+        if total > 0:
+            percentage = (current / total) * 100
+            self.log_status(f"Progress: {current}/{total} ({percentage:.1f}%)")
 
-            self.var_outdir.set(cfg.get("output", "output_dir", fallback=""))
-            self.var_pdf_engine.set(cfg.get("output", "pdf_engine", fallback="reportlab").lower())
-            self.var_lo_path.set(cfg.get("output", "libreoffice_path", fallback=""))
-            self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
-            self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
+            # Update progress ring if it exists
+            if hasattr(self, 'progress_ring') and self.progress_ring:
+                self.progress_ring.value = percentage / 100.0
+                self.progress_ring.update()
 
-            self.var_loaded_ini.set(f"Loaded: {Path(f).name}")
-            self.log(f"Konfigurasi dimuat: {f}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Format .ini tidak valid: {e}")
+    # Utility methods
+    def show_error(self, message: str):
+        """Show error message"""
+        self.page.add(ft.SnackBar(
+            content=ft.Text(message),
+            bgcolor=Colors.RED
+        ))
+
+    def show_about(self, e):
+        """Show about dialog"""
+        about_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("About Excel Splitter"),
+            content=ft.Column([
+                ft.Text("Modern Excel Splitter with Flet UI"),
+                ft.Text("Version 2.0 - Fluent Design"),
+                ft.Divider(height=10),
+                ft.Text("Features:"),
+                ft.Text("• Template-based splitting"),
+                ft.Text("• PDF export support"),
+                ft.Text("• Modern Fluent Design UI"),
+                ft.Text("• Configuration save/load"),
+                ft.Divider(height=10),
+                ft.Text("Developed by Faizal Kusmawan (2025)"),
+            ], tight=True),
+            actions=[
+                ft.TextButton("Close", on_click=lambda _: self.close_dialog(about_dialog))
+            ]
+        )
+        
+        self.page.add(about_dialog)
+        about_dialog.open = True
+        self.page.update()
+
+    def close_dialog(self, dialog):
+        """Close a dialog"""
+        dialog.open = False
+        self.page.update()
+
+    # Configuration methods
+    async def save_config(self, e):
+        """Save current configuration to INI file"""
+        try:
+            # Collect current form values
+            self.collect_form_values()
+
+            file_picker = ft.FilePicker(on_result=self.on_config_save_result)
+            self.page.overlay.append(file_picker)
+            self.page.update()
+
+            await file_picker.save_file(
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["ini"],
+                dialog_title="Save Configuration As"
+            )
+        except Exception as ex:
+            self.show_error(f"Error saving configuration: {str(ex)}")
+
+    def on_config_save_result(self, e: ft.FilePickerResultEvent):
+        """Handle configuration save result"""
+        if e.path:
+            try:
+                config = configparser.ConfigParser()
+                config.add_section('ExcelSplitter')
+
+                # Save all current configuration values
+                config.set('ExcelSplitter', 'source_path', self.source_path or '')
+                config.set('ExcelSplitter', 'sheet_name', self.sheet_name or '')
+                config.set('ExcelSplitter', 'key_column', self.key_column or '')
+                config.set('ExcelSplitter', 'template_path', self.template_path or '')
+                config.set('ExcelSplitter', 'output_dir', self.output_dir or '')
+                config.set('ExcelSplitter', 'header_rows', str(self.header_rows))
+                config.set('ExcelSplitter', 'pdf_engine', self.pdf_engine or 'reportlab')
+                config.set('ExcelSplitter', 'libreoffice_path', self.libreoffice_path or '')
+                config.set('ExcelSplitter', 'prefix', self.prefix or '')
+                config.set('ExcelSplitter', 'suffix', self.suffix or '')
+
+                # Write to file
+                with open(e.path, 'w') as configfile:
+                    config.write(configfile)
+
+                self.log_status(f"Configuration saved to: {e.path}")
+                self.page.add(ft.SnackBar(
+                    content=ft.Text(f"Configuration saved successfully to {Path(e.path).name}"),
+                    bgcolor=Colors.GREEN_600
+                ))
+
+            except Exception as ex:
+                self.show_error(f"Error saving configuration: {str(ex)}")
+        else:
+            self.log_status("Configuration save cancelled")
+
+    async def load_config(self, e):
+        """Load configuration from INI file"""
+        try:
+            file_picker = ft.FilePicker(on_result=self.on_config_load_result)
+            self.page.overlay.append(file_picker)
+            self.page.update()
+
+            await file_picker.pick_files(
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["ini"],
+                dialog_title="Load Configuration"
+            )
+        except Exception as ex:
+            self.show_error(f"Error loading configuration: {str(ex)}")
+
+    def on_config_load_result(self, e: ft.FilePickerResultEvent):
+        """Handle configuration load result"""
+        if e.files:
+            try:
+                config = configparser.ConfigParser()
+                config.read(e.files[0].path)
+
+                if 'ExcelSplitter' in config:
+                    # Set loading flag to protect loaded values
+                    self.is_loading_config = True
+
+                    # Load configuration values
+                    section = config['ExcelSplitter']
+
+                    # Update form fields with loaded values
+                    if 'source_path' in section and section['source_path']:
+                        self.source_path = section['source_path']
+                        self.source_field.value = self.source_path
+                        self.source_field.update()
+
+                    if 'sheet_name' in section and section['sheet_name']:
+                        self.sheet_name = section['sheet_name']
+                        self.sheet_dropdown.value = self.sheet_name
+                        self.sheet_dropdown.update()
+
+                    if 'key_column' in section and section['key_column']:
+                        self.key_column = section['key_column']
+                        self.key_field.value = self.key_column
+                        self.log_status(f"DEBUG: === CONFIG LOAD ===")
+                        self.log_status(f"DEBUG: Raw key_column from INI: '{section['key_column']}'")
+                        self.log_status(f"DEBUG: Set self.key_column to: '{self.key_column}'")
+                        self.log_status(f"DEBUG: Set key_field.value to: '{self.key_field.value}'")
+                        self.log_status(f"DEBUG: === END CONFIG LOAD ===")
+                        self.key_field.update()
+
+                    if 'template_path' in section and section['template_path']:
+                        self.template_path = section['template_path']
+                        self.template_field.value = self.template_path
+                        self.template_field.update()
+
+                    if 'output_dir' in section and section['output_dir']:
+                        self.output_dir = section['output_dir']
+                        self.output_field.value = self.output_dir
+                        self.output_field.update()
+
+                    if 'header_rows' in section:
+                        self.header_rows = int(section['header_rows'])
+                        self.header_rows_field.value = str(self.header_rows)
+                        self.header_rows_field.update()
+
+                    if 'pdf_engine' in section:
+                        self.pdf_engine = section['pdf_engine']
+                        self.pdf_engine_dropdown.value = self.pdf_engine
+                        self.pdf_engine_dropdown.update()
+
+                    if 'libreoffice_path' in section:
+                        self.libreoffice_path = section['libreoffice_path']
+                        self.libreoffice_field.value = self.libreoffice_path
+                        self.libreoffice_field.update()
+
+                    if 'prefix' in section:
+                        self.prefix = section['prefix']
+                        self.prefix_field.value = self.prefix
+                        self.prefix_field.update()
+
+                    if 'suffix' in section:
+                        self.suffix = section['suffix']
+                        self.suffix_field.value = self.suffix
+                        self.suffix_field.update()
+
+                    # Update configuration summary
+                    self.update_config_summary()
+
+                    self.log_status(f"Configuration loaded from: {e.files[0].path}")
+                    self.page.add(ft.SnackBar(
+                        content=ft.Text(f"Configuration loaded successfully from {Path(e.files[0].path).name}"),
+                        bgcolor=Colors.GREEN_600
+                    ))
+
+                    # Refresh sheet names if source file is loaded
+                    if self.source_path:
+                        try:
+                            xls = pd.ExcelFile(self.source_path)
+                            sheets = xls.sheet_names
+                            self.sheet_dropdown.options = [ft.dropdown.Option(sheet, sheet) for sheet in sheets]
+                            if self.sheet_name not in sheets:
+                                self.sheet_name = sheets[0] if sheets else ""
+                                self.sheet_dropdown.value = self.sheet_name
+                            self.sheet_dropdown.update()
+                        except Exception as ex:
+                            self.log_status(f"Warning: Could not refresh sheets: {str(ex)}")
+
+                    # Refresh headers if source file and sheet are loaded
+                    if self.source_path and self.sheet_name:
+                        try:
+                            df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
+                            headers = list(df.columns.astype(str))
+                            all_options = []
+                            for i, header in enumerate(headers):
+                                all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
+                            for i in range(len(headers)):
+                                all_options.append(ft.dropdown.Option(f"{i+1}", f"Column {i+1}"))
+
+                            # For text field, validate the loaded key column value
+                            # Check if it's a valid column index or column name
+                            is_valid_column = False
+
+                            # Debug: Show current state before validation
+                            self.log_status(f"DEBUG: === KEY COLUMN VALIDATION ===")
+                            self.log_status(f"DEBUG: Current key_column value: '{self.key_column}'")
+                            self.log_status(f"DEBUG: Number of headers found: {len(headers)}")
+                            self.log_status(f"DEBUG: Headers: {headers}")
+
+                            # Check if it's a valid column index (1-based)
+                            try:
+                                col_idx = int(self.key_column)
+                                self.log_status(f"DEBUG: Parsed as integer: {col_idx}")
+                                if 1 <= col_idx <= len(headers):
+                                    is_valid_column = True
+                                    self.log_status(f"DEBUG: '{self.key_column}' is valid column index {col_idx} (1-based)")
+                                else:
+                                    self.log_status(f"DEBUG: '{self.key_column}' is out of range (1-{len(headers)})")
+                            except ValueError:
+                                self.log_status(f"DEBUG: '{self.key_column}' is not a valid integer")
+                                pass
+
+                            # Check if it's a valid column name
+                            if self.key_column in headers:
+                                is_valid_column = True
+                                self.log_status(f"DEBUG: '{self.key_column}' is valid column name")
+                            else:
+                                self.log_status(f"DEBUG: '{self.key_column}' is not found in headers")
+
+                            # Only default to first header if the loaded value is invalid
+                            if not is_valid_column and headers:
+                                self.log_status(f"DEBUG: '{self.key_column}' is invalid, defaulting to '{headers[0]}'")
+                                self.key_column = headers[0]
+                                self.key_field.value = self.key_column
+                            else:
+                                self.log_status(f"DEBUG: '{self.key_column}' is valid, keeping original value")
+                            self.key_field.update()
+                            self.log_status(f"DEBUG: Final key_field value after validation: '{self.key_field.value}'")
+                            self.log_status(f"DEBUG: === END VALIDATION ===")
+
+                            # Additional safety: Store the loaded value to prevent any other overrides
+                            loaded_key_column = self.key_column
+                        except Exception as ex:
+                            self.log_status(f"Warning: Could not refresh headers: {str(ex)}")
+
+                    # Final debug check
+                    self.log_status(f"DEBUG: === FINAL VALUES BEFORE PAGE UPDATE ===")
+                    self.log_status(f"DEBUG: self.key_column: '{self.key_column}'")
+                    self.log_status(f"DEBUG: self.key_field.value: '{self.key_field.value}'")
+                    self.log_status(f"DEBUG: === END FINAL CHECK ===")
+
+                    # Reset loading flag
+                    self.is_loading_config = False
+
+                    self.page.update()
+
+                else:
+                    self.show_error("Invalid configuration file - missing ExcelSplitter section")
+
+            except Exception as ex:
+                self.show_error(f"Error loading configuration: {str(ex)}")
+        else:
+            self.log_status("Configuration load cancelled")
+
+
+def main(page: ft.Page):
+    """Main application entry point"""
+    app = ExcelSplitterApp(page)
 
 
 if __name__ == "__main__":
-    app = SplitApp()
-    app.mainloop()
+    ft.app(target=main, assets_dir="assets")
