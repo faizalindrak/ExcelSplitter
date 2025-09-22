@@ -584,7 +584,8 @@ class ExcelSplitterApp:
             hint_text="Select your Excel file to split",
             read_only=True,
             prefix_icon=Icons.DESCRIPTION,
-            expand=True
+            expand=True,
+            on_change=self.on_form_field_change
         )
         
         source_browse_btn = ft.FilledTonalButton(
@@ -598,13 +599,14 @@ class ExcelSplitterApp:
             label="Sheet Name",
             hint_text="Select sheet from Excel file",
             prefix_icon=Icons.TABLE_CHART,
-            expand=True
+            expand=True,
+            on_change=self.on_form_field_change
         )
         
         load_sheets_btn = ft.FilledTonalButton(
             text="Load Sheets",
             icon=Icons.REFRESH,
-            on_click=self.load_sheets
+            on_click=self.load_sheets_with_loading
         )
         
         # Key column selection
@@ -622,7 +624,7 @@ class ExcelSplitterApp:
         load_headers_btn = ft.FilledTonalButton(
             text="Load Headers",
             icon=Icons.VIEW_COLUMN,
-            on_click=self.load_headers
+            on_click=self.load_headers_with_loading
         )
         
         return ft.Container(
@@ -660,7 +662,8 @@ class ExcelSplitterApp:
             hint_text="Template file for formatting output",
             read_only=True,
             prefix_icon=Icons.DESIGN_SERVICES,
-            expand=True
+            expand=True,
+            on_change=self.on_form_field_change
         )
         
         template_browse_btn = ft.FilledTonalButton(
@@ -675,7 +678,8 @@ class ExcelSplitterApp:
             value="5",
             prefix_icon=Icons.FORMAT_LIST_NUMBERED,
             width=200,
-            input_filter=ft.NumbersOnlyInputFilter()
+            input_filter=ft.NumbersOnlyInputFilter(),
+            on_change=self.on_form_field_change
         )
         
         return ft.Container(
@@ -718,7 +722,8 @@ class ExcelSplitterApp:
             hint_text="Where to save split files",
             read_only=True,
             prefix_icon=Icons.FOLDER,
-            expand=True
+            expand=True,
+            on_change=self.on_form_field_change
         )
         
         output_browse_btn = ft.FilledTonalButton(
@@ -738,7 +743,8 @@ class ExcelSplitterApp:
                 ft.dropdown.Option("reportlab", "ReportLab (Fast)"),
                 ft.dropdown.Option("libreoffice", "LibreOffice (Better formatting)")
             ],
-            width=300
+            width=300,
+            on_change=self.on_form_field_change
         )
         
         # LibreOffice path
@@ -746,7 +752,8 @@ class ExcelSplitterApp:
             label="LibreOffice Path (Optional)",
             hint_text="Path to soffice.exe",
             prefix_icon=Icons.INTEGRATION_INSTRUCTIONS,
-            expand=True
+            expand=True,
+            on_change=self.on_form_field_change
         )
         
         libreoffice_browse_btn = ft.FilledTonalButton(
@@ -760,14 +767,16 @@ class ExcelSplitterApp:
             label="File Prefix",
             hint_text="Text to add before filename",
             prefix_icon=Icons.LABEL,
-            width=200
+            width=200,
+            on_change=self.on_form_field_change
         )
-        
+
         self.suffix_field = ft.TextField(
-            label="File Suffix", 
+            label="File Suffix",
             hint_text="Text to add after filename",
             prefix_icon=Icons.LABEL_OUTLINE,
-            width=200
+            width=200,
+            on_change=self.on_form_field_change
         )
         
         return ft.Container(
@@ -804,31 +813,44 @@ class ExcelSplitterApp:
         """Build the generate/action tab"""
         
         # Configuration summary card
+        source_ref = ft.Ref[ft.Text]()
+        sheet_key_ref = ft.Ref[ft.Text]()
+        template_ref = ft.Ref[ft.Text]()
+        output_ref = ft.Ref[ft.Text]()
+
+        # Store references for later updates
+        self.config_summary_refs = {
+            'source': source_ref,
+            'sheet_key': sheet_key_ref,
+            'template': template_ref,
+            'output': output_ref
+        }
+
         config_summary = ft.Card(
             content=ft.Container(
                 content=ft.Column([
                     ft.Text("Configuration Summary", size=16, weight=ft.FontWeight.W_500),
                     ft.Divider(height=10),
-                    
+
                     ft.ListTile(
                         leading=ft.Icon(Icons.DESCRIPTION),
                         title=ft.Text("Source File"),
-                        subtitle=ft.Text("Not selected", ref=ft.Ref[ft.Text]())
+                        subtitle=ft.Text("Not selected", ref=source_ref)
                     ),
                     ft.ListTile(
                         leading=ft.Icon(Icons.TABLE_CHART),
                         title=ft.Text("Sheet & Key Column"),
-                        subtitle=ft.Text("Not configured", ref=ft.Ref[ft.Text]())
+                        subtitle=ft.Text("Not configured", ref=sheet_key_ref)
                     ),
                     ft.ListTile(
                         leading=ft.Icon(Icons.DESIGN_SERVICES),
                         title=ft.Text("Template File"),
-                        subtitle=ft.Text("Not selected", ref=ft.Ref[ft.Text]())
+                        subtitle=ft.Text("Not selected", ref=template_ref)
                     ),
                     ft.ListTile(
                         leading=ft.Icon(Icons.FOLDER),
                         title=ft.Text("Output Folder"),
-                        subtitle=ft.Text("Not selected", ref=ft.Ref[ft.Text]())
+                        subtitle=ft.Text("Not selected", ref=output_ref)
                     ),
                 ]),
                 padding=20
@@ -969,22 +991,25 @@ class ExcelSplitterApp:
         if not self.source_path:
             self.show_error("Please select a source Excel file first")
             return
-            
+
         try:
             xls = pd.ExcelFile(self.source_path)
             sheets = xls.sheet_names
-            
+
             self.sheet_dropdown.options = [
                 ft.dropdown.Option(sheet, sheet) for sheet in sheets
             ]
-            
+
             if sheets:
                 self.sheet_dropdown.value = sheets[0]
                 self.sheet_name = sheets[0]
-            
+
             self.log_status(f"Loaded {len(sheets)} sheets: {', '.join(sheets)}")
             self.sheet_dropdown.update()
-            
+
+            # Update configuration summary
+            self.update_config_summary()
+
         except Exception as ex:
             self.show_error(f"Error loading sheets: {str(ex)}")
 
@@ -1026,6 +1051,9 @@ class ExcelSplitterApp:
             self.log_status(f"DEBUG: Key dropdown options count: {len(all_options)}")
             self.key_dropdown.update()
 
+            # Update configuration summary
+            self.update_config_summary()
+
         except Exception as ex:
             self.log_status(f"DEBUG: Error loading headers: {type(ex).__name__}: {str(ex)}")
             self.show_error(f"Error loading headers: {str(ex)}")
@@ -1037,6 +1065,120 @@ class ExcelSplitterApp:
             self.log_status(f"DEBUG: Key column manually set to: '{self.key_column}'")
         else:
             self.log_status("DEBUG: Key column cleared")
+
+        # Update configuration summary
+        self.update_config_summary()
+
+    def on_form_field_change(self, e):
+        """Handle form field value changes"""
+        # Update configuration summary when any form field changes
+        self.update_config_summary()
+
+    async def load_sheets_with_loading(self, e):
+        """Load sheets with loading indicator"""
+        if not self.source_path:
+            self.show_error("Please select a source Excel file first")
+            return
+
+        # Show loading state
+        original_text = e.control.text
+        e.control.text = "Loading..."
+        e.control.disabled = True
+        e.control.update()
+
+        try:
+            # Run the actual loading in a separate task
+            await self.load_sheets_async(e)
+        finally:
+            # Restore button state
+            e.control.text = original_text
+            e.control.disabled = False
+            e.control.update()
+
+    async def load_sheets_async(self, e):
+        """Async version of load_sheets"""
+        try:
+            xls = pd.ExcelFile(self.source_path)
+            sheets = xls.sheet_names
+
+            self.sheet_dropdown.options = [
+                ft.dropdown.Option(sheet, sheet) for sheet in sheets
+            ]
+
+            if sheets:
+                self.sheet_dropdown.value = sheets[0]
+                self.sheet_name = sheets[0]
+
+            self.log_status(f"Loaded {len(sheets)} sheets: {', '.join(sheets)}")
+            self.sheet_dropdown.update()
+
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.show_error(f"Error loading sheets: {str(ex)}")
+
+    async def load_headers_with_loading(self, e):
+        """Load headers with loading indicator"""
+        if not self.source_path or not self.sheet_name:
+            self.show_error("Please select source file and sheet first")
+            return
+
+        # Show loading state
+        original_text = e.control.text
+        e.control.text = "Loading..."
+        e.control.disabled = True
+        e.control.update()
+
+        try:
+            # Run the actual loading in a separate task
+            await self.load_headers_async(e)
+        finally:
+            # Restore button state
+            e.control.text = original_text
+            e.control.disabled = False
+            e.control.update()
+
+    async def load_headers_async(self, e):
+        """Async version of load_headers"""
+        try:
+            # Get current sheet name
+            self.sheet_name = self.sheet_dropdown.value
+            self.log_status(f"DEBUG: Loading headers from sheet '{self.sheet_name}'")
+
+            df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
+            headers = list(df.columns.astype(str))
+            index_vals = [f"{i+1}" for i in range(len(headers))]
+
+            # Debug: Log header information
+            self.log_status(f"DEBUG: Found {len(headers)} headers: {headers[:5]}{'...' if len(headers) > 5 else ''}")
+            self.log_status(f"DEBUG: Index values: {index_vals}")
+
+            # Combine headers and indices
+            all_options = []
+            for i, header in enumerate(headers):
+                all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
+
+            for i, idx in enumerate(index_vals):
+                all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
+
+            self.key_dropdown.options = all_options
+
+            if headers:
+                self.key_dropdown.value = headers[0]
+                self.key_column = headers[0]
+                self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+
+            self.log_status(f"Loaded {len(headers)} headers")
+            self.log_status(f"DEBUG: Key dropdown options count: {len(all_options)}")
+            self.key_dropdown.update()
+
+            # Update configuration summary
+            self.update_config_summary()
+
+        except Exception as ex:
+            self.log_status(f"DEBUG: Error loading headers: {type(ex).__name__}: {str(ex)}")
+            self.show_error(f"Error loading headers: {str(ex)}")
 
     # Generation methods
     def start_generation(self, e):
@@ -1086,6 +1228,47 @@ class ExcelSplitterApp:
         self.log_status(f"DEBUG: Collected form values - template: {self.template_path}")
         self.log_status(f"DEBUG: Collected form values - output: {self.output_dir}")
         self.log_status(f"DEBUG: Collected form values - header_rows: {self.header_rows}")
+
+        # Update configuration summary
+        self.update_config_summary()
+
+    def update_config_summary(self):
+        """Update the configuration summary with current values"""
+        if not hasattr(self, 'config_summary_refs'):
+            return
+
+        # Get summary text references
+        source_ref = self.config_summary_refs['source']
+        sheet_key_ref = self.config_summary_refs['sheet_key']
+        template_ref = self.config_summary_refs['template']
+        output_ref = self.config_summary_refs['output']
+
+        # Update source file summary
+        if self.source_path:
+            source_ref.value = Path(self.source_path).name
+        else:
+            source_ref.value = "Not selected"
+
+        # Update sheet & key column summary
+        if self.sheet_name and self.key_column:
+            sheet_key_ref.value = f"Sheet: {self.sheet_name}, Key: {self.key_column}"
+        else:
+            sheet_key_ref.value = "Not configured"
+
+        # Update template file summary
+        if self.template_path:
+            template_ref.value = Path(self.template_path).name
+        else:
+            template_ref.value = "Not selected"
+
+        # Update output folder summary
+        if self.output_dir:
+            output_ref.value = Path(self.output_dir).name
+        else:
+            output_ref.value = "Not selected"
+
+        # Update the page to reflect changes
+        self.page.update()
 
     def validate_inputs(self):
         """Validate all required inputs"""
@@ -1212,10 +1395,14 @@ class ExcelSplitterApp:
 
     def update_progress(self, total: int, current: int):
         """Update progress indicator"""
-        # For now, just log progress
         if total > 0:
             percentage = (current / total) * 100
             self.log_status(f"Progress: {current}/{total} ({percentage:.1f}%)")
+
+            # Update progress ring if it exists
+            if hasattr(self, 'progress_ring') and self.progress_ring:
+                self.progress_ring.value = percentage / 100.0
+                self.progress_ring.update()
 
     # Utility methods
     def show_error(self, message: str):
@@ -1255,21 +1442,186 @@ class ExcelSplitterApp:
         self.page.update()
 
     # Configuration methods
-    def save_config(self, e):
+    async def save_config(self, e):
         """Save current configuration to INI file"""
-        # TODO: Implement configuration saving
-        self.page.add(ft.SnackBar(
-            content=ft.Text("Configuration save feature coming soon"),
-            bgcolor=Colors.BLUE
-        ))
+        try:
+            # Collect current form values
+            self.collect_form_values()
 
-    def load_config(self, e):
+            file_picker = ft.FilePicker(on_result=self.on_config_save_result)
+            self.page.overlay.append(file_picker)
+            self.page.update()
+
+            await file_picker.save_file(
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["ini"],
+                dialog_title="Save Configuration As"
+            )
+        except Exception as ex:
+            self.show_error(f"Error saving configuration: {str(ex)}")
+
+    def on_config_save_result(self, e: ft.FilePickerResultEvent):
+        """Handle configuration save result"""
+        if e.path:
+            try:
+                config = configparser.ConfigParser()
+                config.add_section('ExcelSplitter')
+
+                # Save all current configuration values
+                config.set('ExcelSplitter', 'source_path', self.source_path or '')
+                config.set('ExcelSplitter', 'sheet_name', self.sheet_name or '')
+                config.set('ExcelSplitter', 'key_column', self.key_column or '')
+                config.set('ExcelSplitter', 'template_path', self.template_path or '')
+                config.set('ExcelSplitter', 'output_dir', self.output_dir or '')
+                config.set('ExcelSplitter', 'header_rows', str(self.header_rows))
+                config.set('ExcelSplitter', 'pdf_engine', self.pdf_engine or 'reportlab')
+                config.set('ExcelSplitter', 'libreoffice_path', self.libreoffice_path or '')
+                config.set('ExcelSplitter', 'prefix', self.prefix or '')
+                config.set('ExcelSplitter', 'suffix', self.suffix or '')
+
+                # Write to file
+                with open(e.path, 'w') as configfile:
+                    config.write(configfile)
+
+                self.log_status(f"Configuration saved to: {e.path}")
+                self.page.add(ft.SnackBar(
+                    content=ft.Text(f"Configuration saved successfully to {Path(e.path).name}"),
+                    bgcolor=Colors.GREEN_600
+                ))
+
+            except Exception as ex:
+                self.show_error(f"Error saving configuration: {str(ex)}")
+        else:
+            self.log_status("Configuration save cancelled")
+
+    async def load_config(self, e):
         """Load configuration from INI file"""
-        # TODO: Implement configuration loading
-        self.page.add(ft.SnackBar(
-            content=ft.Text("Configuration load feature coming soon"),
-            bgcolor=Colors.BLUE
-        ))
+        try:
+            file_picker = ft.FilePicker(on_result=self.on_config_load_result)
+            self.page.overlay.append(file_picker)
+            self.page.update()
+
+            await file_picker.pick_files(
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["ini"],
+                dialog_title="Load Configuration"
+            )
+        except Exception as ex:
+            self.show_error(f"Error loading configuration: {str(ex)}")
+
+    def on_config_load_result(self, e: ft.FilePickerResultEvent):
+        """Handle configuration load result"""
+        if e.files:
+            try:
+                config = configparser.ConfigParser()
+                config.read(e.files[0].path)
+
+                if 'ExcelSplitter' in config:
+                    # Load configuration values
+                    section = config['ExcelSplitter']
+
+                    # Update form fields with loaded values
+                    if 'source_path' in section and section['source_path']:
+                        self.source_path = section['source_path']
+                        self.source_field.value = self.source_path
+                        self.source_field.update()
+
+                    if 'sheet_name' in section and section['sheet_name']:
+                        self.sheet_name = section['sheet_name']
+                        self.sheet_dropdown.value = self.sheet_name
+                        self.sheet_dropdown.update()
+
+                    if 'key_column' in section and section['key_column']:
+                        self.key_column = section['key_column']
+                        self.key_dropdown.value = self.key_column
+                        self.key_dropdown.update()
+
+                    if 'template_path' in section and section['template_path']:
+                        self.template_path = section['template_path']
+                        self.template_field.value = self.template_path
+                        self.template_field.update()
+
+                    if 'output_dir' in section and section['output_dir']:
+                        self.output_dir = section['output_dir']
+                        self.output_field.value = self.output_dir
+                        self.output_field.update()
+
+                    if 'header_rows' in section:
+                        self.header_rows = int(section['header_rows'])
+                        self.header_rows_field.value = str(self.header_rows)
+                        self.header_rows_field.update()
+
+                    if 'pdf_engine' in section:
+                        self.pdf_engine = section['pdf_engine']
+                        self.pdf_engine_dropdown.value = self.pdf_engine
+                        self.pdf_engine_dropdown.update()
+
+                    if 'libreoffice_path' in section:
+                        self.libreoffice_path = section['libreoffice_path']
+                        self.libreoffice_field.value = self.libreoffice_path
+                        self.libreoffice_field.update()
+
+                    if 'prefix' in section:
+                        self.prefix = section['prefix']
+                        self.prefix_field.value = self.prefix
+                        self.prefix_field.update()
+
+                    if 'suffix' in section:
+                        self.suffix = section['suffix']
+                        self.suffix_field.value = self.suffix
+                        self.suffix_field.update()
+
+                    # Update configuration summary
+                    self.update_config_summary()
+
+                    self.log_status(f"Configuration loaded from: {e.files[0].path}")
+                    self.page.add(ft.SnackBar(
+                        content=ft.Text(f"Configuration loaded successfully from {Path(e.files[0].path).name}"),
+                        bgcolor=Colors.GREEN_600
+                    ))
+
+                    # Refresh sheet names if source file is loaded
+                    if self.source_path:
+                        try:
+                            xls = pd.ExcelFile(self.source_path)
+                            sheets = xls.sheet_names
+                            self.sheet_dropdown.options = [ft.dropdown.Option(sheet, sheet) for sheet in sheets]
+                            if self.sheet_name not in sheets:
+                                self.sheet_name = sheets[0] if sheets else ""
+                                self.sheet_dropdown.value = self.sheet_name
+                            self.sheet_dropdown.update()
+                        except Exception as ex:
+                            self.log_status(f"Warning: Could not refresh sheets: {str(ex)}")
+
+                    # Refresh headers if source file and sheet are loaded
+                    if self.source_path and self.sheet_name:
+                        try:
+                            df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
+                            headers = list(df.columns.astype(str))
+                            all_options = []
+                            for i, header in enumerate(headers):
+                                all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
+                            for i in range(len(headers)):
+                                all_options.append(ft.dropdown.Option(f"{i+1}", f"Column {i+1}"))
+
+                            self.key_dropdown.options = all_options
+                            if self.key_column not in [opt.key for opt in all_options]:
+                                self.key_column = headers[0] if headers else ""
+                                self.key_dropdown.value = self.key_column
+                            self.key_dropdown.update()
+                        except Exception as ex:
+                            self.log_status(f"Warning: Could not refresh headers: {str(ex)}")
+
+                    self.page.update()
+
+                else:
+                    self.show_error("Invalid configuration file - missing ExcelSplitter section")
+
+            except Exception as ex:
+                self.show_error(f"Error loading configuration: {str(ex)}")
+        else:
+            self.log_status("Configuration load cancelled")
 
 
 def main(page: ft.Page):
