@@ -510,12 +510,12 @@ class ExcelSplitterApp:
     def build_ui(self):
         """Build the modern UI using Flet components"""
         
-        # App Bar with modern styling
+        # App Bar with modern styling - Fixed contrast with proper Material Design color
         app_bar = ft.AppBar(
             leading=ft.Icon(Icons.SPLITSCREEN),
             title=ft.Text("Excel Splitter", size=20, weight=ft.FontWeight.W_500),
             center_title=False,
-            bgcolor=Colors.GREY_400,
+            bgcolor=Colors.SURFACE_CONTAINER_HIGHEST,
             actions=[
                 ft.PopupMenuButton(
                     icon=Icons.MORE_VERT,
@@ -528,6 +528,11 @@ class ExcelSplitterApp:
                 )
             ]
         )
+
+        # Debug: Log header styling for contrast analysis
+        self.log_status("DEBUG: AppBar created with bgcolor=SURFACE_CONTAINER_HIGHEST (fixed contrast)")
+        self.log_status(f"DEBUG: Current theme mode: {self.page.theme_mode}")
+        self.log_status(f"DEBUG: Color scheme seed: {Colors.BLUE}")
         
         self.page.appbar = app_bar
         
@@ -607,8 +612,12 @@ class ExcelSplitterApp:
             label="Key Column",
             hint_text="Column to split data by",
             prefix_icon=Icons.KEY,
-            expand=True
+            expand=True,
+            on_change=self.on_key_column_change
         )
+
+        # Debug: Log key dropdown creation
+        self.log_status("DEBUG: Key column dropdown created")
         
         load_headers_btn = ft.FilledTonalButton(
             text="Load Headers",
@@ -984,34 +993,50 @@ class ExcelSplitterApp:
         if not self.source_path or not self.sheet_name:
             self.show_error("Please select source file and sheet first")
             return
-            
+
         try:
             # Get current sheet name
             self.sheet_name = self.sheet_dropdown.value
-            
+            self.log_status(f"DEBUG: Loading headers from sheet '{self.sheet_name}'")
+
             df = pd.read_excel(self.source_path, sheet_name=self.sheet_name, nrows=0)
             headers = list(df.columns.astype(str))
             index_vals = [f"{i+1}" for i in range(len(headers))]
-            
+
+            # Debug: Log header information
+            self.log_status(f"DEBUG: Found {len(headers)} headers: {headers[:5]}{'...' if len(headers) > 5 else ''}")
+            self.log_status(f"DEBUG: Index values: {index_vals}")
+
             # Combine headers and indices
             all_options = []
             for i, header in enumerate(headers):
                 all_options.append(ft.dropdown.Option(header, f"{header} (Column {i+1})"))
-            
+
             for i, idx in enumerate(index_vals):
                 all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
-            
+
             self.key_dropdown.options = all_options
-            
+
             if headers:
                 self.key_dropdown.value = headers[0]
                 self.key_column = headers[0]
-            
+                self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+
             self.log_status(f"Loaded {len(headers)} headers")
+            self.log_status(f"DEBUG: Key dropdown options count: {len(all_options)}")
             self.key_dropdown.update()
-            
+
         except Exception as ex:
+            self.log_status(f"DEBUG: Error loading headers: {type(ex).__name__}: {str(ex)}")
             self.show_error(f"Error loading headers: {str(ex)}")
+
+    def on_key_column_change(self, e):
+        """Handle key column dropdown value changes"""
+        if e.control.value:
+            self.key_column = e.control.value
+            self.log_status(f"DEBUG: Key column manually set to: '{self.key_column}'")
+        else:
+            self.log_status("DEBUG: Key column cleared")
 
     # Generation methods
     def start_generation(self, e):
@@ -1054,6 +1079,14 @@ class ExcelSplitterApp:
         self.prefix = self.prefix_field.value or ""
         self.suffix = self.suffix_field.value or ""
 
+        # Debug: Log collected form values
+        self.log_status(f"DEBUG: Collected form values - source: {self.source_path}")
+        self.log_status(f"DEBUG: Collected form values - sheet: {self.sheet_name}")
+        self.log_status(f"DEBUG: Collected form values - key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: Collected form values - template: {self.template_path}")
+        self.log_status(f"DEBUG: Collected form values - output: {self.output_dir}")
+        self.log_status(f"DEBUG: Collected form values - header_rows: {self.header_rows}")
+
     def validate_inputs(self):
         """Validate all required inputs"""
         if not self.source_field.value:
@@ -1083,8 +1116,10 @@ class ExcelSplitterApp:
             # Convert key column to appropriate type
             try:
                 key_col = int(self.key_column)
+                self.log_status(f"DEBUG: Converting key column '{self.key_column}' to int: {key_col}")
             except ValueError:
                 key_col = self.key_column
+                self.log_status(f"DEBUG: Using key column as string: '{key_col}'")
 
             # Validate ReportLab if needed
             if self.pdf_engine == "reportlab" and not REPORTLAB_AVAILABLE:
