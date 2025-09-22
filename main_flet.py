@@ -469,6 +469,9 @@ class ExcelSplitterApp:
         self.prefix = ""
         self.suffix = ""
         self.loaded_ini = ""
+
+        # Loading state flags
+        self.is_loading_config = False
         
         # UI controls
         self.source_field = None
@@ -609,17 +612,17 @@ class ExcelSplitterApp:
             on_click=self.load_sheets_with_loading
         )
         
-        # Key column selection
-        self.key_dropdown = ft.Dropdown(
+        # Key column input (manual text entry)
+        self.key_field = ft.TextField(
             label="Key Column",
-            hint_text="Column to split data by",
+            hint_text="Enter column name or column index (e.g., 'Customer' or '1')",
             prefix_icon=Icons.KEY,
             expand=True,
             on_change=self.on_key_column_change
         )
 
-        # Debug: Log key dropdown creation
-        self.log_status("DEBUG: Key column dropdown created")
+        # Debug: Log key field creation
+        self.log_status("DEBUG: Key column text field created")
         
         load_headers_btn = ft.FilledTonalButton(
             text="Load Headers",
@@ -646,7 +649,7 @@ class ExcelSplitterApp:
                 
                 # Key column row
                 ft.Row([
-                    self.key_dropdown,
+                    self.key_field,
                     load_headers_btn
                 ], spacing=10),
                 
@@ -812,49 +815,65 @@ class ExcelSplitterApp:
     def build_generate_tab(self):
         """Build the generate/action tab"""
         
-        # Configuration summary card
-        source_ref = ft.Ref[ft.Text]()
-        sheet_key_ref = ft.Ref[ft.Text]()
-        template_ref = ft.Ref[ft.Text]()
-        output_ref = ft.Ref[ft.Text]()
+        # Configuration summary - Dynamic version
+        config_summary = ft.Container(
+            content=ft.Column([
+                ft.Text("Configuration", size=14, weight=ft.FontWeight.W_500),
+                ft.Divider(height=5),
 
-        # Store references for later updates
-        self.config_summary_refs = {
-            'source': source_ref,
-            'sheet_key': sheet_key_ref,
-            'template': template_ref,
-            'output': output_ref
-        }
+                # Dynamic info row that updates with form values
+                ft.Container(
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.DESCRIPTION, size=16),
+                                ft.Text("Source:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.source_field.value else Path(self.source_field.value).name, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.TABLE_CHART, size=16),
+                                ft.Text("Sheet:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not set" if not self.sheet_dropdown.value else self.sheet_dropdown.value, size=11),
+                            ], spacing=5),
+                        ], spacing=2),
 
-        config_summary = ft.Card(
-            content=ft.Container(
-                content=ft.Column([
-                    ft.Text("Configuration Summary", size=16, weight=ft.FontWeight.W_500),
-                    ft.Divider(height=10),
+                        ft.VerticalDivider(width=1),
 
-                    ft.ListTile(
-                        leading=ft.Icon(Icons.DESCRIPTION),
-                        title=ft.Text("Source File"),
-                        subtitle=ft.Text("Not selected", ref=source_ref)
-                    ),
-                    ft.ListTile(
-                        leading=ft.Icon(Icons.TABLE_CHART),
-                        title=ft.Text("Sheet & Key Column"),
-                        subtitle=ft.Text("Not configured", ref=sheet_key_ref)
-                    ),
-                    ft.ListTile(
-                        leading=ft.Icon(Icons.DESIGN_SERVICES),
-                        title=ft.Text("Template File"),
-                        subtitle=ft.Text("Not selected", ref=template_ref)
-                    ),
-                    ft.ListTile(
-                        leading=ft.Icon(Icons.FOLDER),
-                        title=ft.Text("Output Folder"),
-                        subtitle=ft.Text("Not selected", ref=output_ref)
-                    ),
-                ]),
-                padding=10
-            )
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.KEY, size=16),
+                                ft.Text("Key:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not set" if not self.key_field.value else self.key_field.value, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.DESIGN_SERVICES, size=16),
+                                ft.Text("Template:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.template_field.value else Path(self.template_field.value).name, size=11),
+                            ], spacing=5),
+                        ], spacing=2),
+
+                        ft.VerticalDivider(width=1),
+
+                        ft.Column([
+                            ft.Row([
+                                ft.Icon(Icons.FOLDER, size=16),
+                                ft.Text("Output:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text("Not selected" if not self.output_field.value else Path(self.output_field.value).name, size=11),
+                            ], spacing=5),
+                            ft.Row([
+                                ft.Icon(Icons.PICTURE_AS_PDF, size=16),
+                                ft.Text("PDF:", size=12, weight=ft.FontWeight.W_500),
+                                ft.Text(self.pdf_engine_dropdown.value or "reportlab", size=11),
+                            ], spacing=5),
+                        ], spacing=2),
+                    ], spacing=15),
+                    padding=ft.padding.all(10),
+                    border=ft.border.all(1, Colors.OUTLINE),
+                    border_radius=8,
+                    bgcolor=Colors.SURFACE
+                )
+            ], spacing=10),
+            margin=ft.margin.only(bottom=10)
         )
         
         # Generate button
@@ -1055,16 +1074,22 @@ class ExcelSplitterApp:
             for i, idx in enumerate(index_vals):
                 all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
 
-            self.key_dropdown.options = all_options
-
+            # Set the first header as default value in the text field only if no key column is set
+            # and we're not currently loading a configuration
             if headers:
-                self.key_dropdown.value = headers[0]
-                self.key_column = headers[0]
-                self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                if not self.key_field.value and not self.is_loading_config:  # Only set default if no value is already set and not loading config
+                    self.key_field.value = headers[0]
+                    self.key_column = headers[0]
+                    self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                else:
+                    if self.is_loading_config:
+                        self.log_status(f"DEBUG: Loading config - keeping loaded key column value: {self.key_field.value}")
+                    else:
+                        self.log_status(f"DEBUG: Keeping existing key column value: {self.key_field.value}")
+                    # Don't override the loaded value
 
             self.log_status(f"Loaded {len(headers)} headers")
-            self.log_status(f"DEBUG: Key dropdown options count: {len(all_options)}")
-            self.key_dropdown.update()
+            self.key_field.update()
 
             # Update configuration summary
             self.update_config_summary()
@@ -1180,16 +1205,22 @@ class ExcelSplitterApp:
             for i, idx in enumerate(index_vals):
                 all_options.append(ft.dropdown.Option(idx, f"Column {idx}"))
 
-            self.key_dropdown.options = all_options
-
+            # Set the first header as default value in the text field only if no key column is set
+            # and we're not currently loading a configuration
             if headers:
-                self.key_dropdown.value = headers[0]
-                self.key_column = headers[0]
-                self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                if not self.key_field.value and not self.is_loading_config:  # Only set default if no value is already set and not loading config
+                    self.key_field.value = headers[0]
+                    self.key_column = headers[0]
+                    self.log_status(f"DEBUG: Set default key column to: {headers[0]}")
+                else:
+                    if self.is_loading_config:
+                        self.log_status(f"DEBUG: Loading config - keeping loaded key column value: {self.key_field.value}")
+                    else:
+                        self.log_status(f"DEBUG: Keeping existing key column value: {self.key_field.value}")
+                    # Don't override the loaded value
 
             self.log_status(f"Loaded {len(headers)} headers")
-            self.log_status(f"DEBUG: Key dropdown options count: {len(all_options)}")
-            self.key_dropdown.update()
+            self.key_field.update()
 
             # Update configuration summary
             self.update_config_summary()
@@ -1230,7 +1261,7 @@ class ExcelSplitterApp:
         """Collect all form values"""
         self.source_path = self.source_field.value or ""
         self.sheet_name = self.sheet_dropdown.value or ""
-        self.key_column = self.key_dropdown.value or ""
+        self.key_column = self.key_field.value or ""
         self.template_path = self.template_field.value or ""
         self.output_dir = self.output_field.value or ""
         self.header_rows = int(self.header_rows_field.value or "5")
@@ -1240,12 +1271,18 @@ class ExcelSplitterApp:
         self.suffix = self.suffix_field.value or ""
 
         # Debug: Log collected form values
+        self.log_status(f"DEBUG: === COLLECT FORM VALUES ===")
+        self.log_status(f"DEBUG: Before collect - self.key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: Before collect - self.key_field.value: '{self.key_field.value}'")
         self.log_status(f"DEBUG: Collected form values - source: {self.source_path}")
         self.log_status(f"DEBUG: Collected form values - sheet: {self.sheet_name}")
         self.log_status(f"DEBUG: Collected form values - key_column: '{self.key_column}'")
         self.log_status(f"DEBUG: Collected form values - template: {self.template_path}")
         self.log_status(f"DEBUG: Collected form values - output: {self.output_dir}")
         self.log_status(f"DEBUG: Collected form values - header_rows: {self.header_rows}")
+        self.log_status(f"DEBUG: After collect - self.key_column: '{self.key_column}'")
+        self.log_status(f"DEBUG: After collect - self.key_field.value: '{self.key_field.value}'")
+        self.log_status(f"DEBUG: === END COLLECT ===")
 
         # Update configuration summary
         self.update_config_summary()
@@ -1253,47 +1290,13 @@ class ExcelSplitterApp:
     def initialize_config_summary(self):
         """Initialize configuration summary after UI is rendered"""
         self.log_status("DEBUG: Initializing configuration summary")
-        self.update_config_summary()
+        # Configuration summary is now static and updates automatically with form changes
 
     def update_config_summary(self):
         """Update the configuration summary with current values"""
-        if not hasattr(self, 'config_summary_refs') or not self.config_summary_refs:
-            self.log_status("DEBUG: Config summary refs not initialized yet")
-            return
-
-        # Get summary text references
-        source_ref = self.config_summary_refs['source']
-        sheet_key_ref = self.config_summary_refs['sheet_key']
-        template_ref = self.config_summary_refs['template']
-        output_ref = self.config_summary_refs['output']
-
-        # Update source file summary
-        if self.source_path:
-            source_ref.value = Path(self.source_path).name
-        else:
-            source_ref.value = "Not selected"
-
-        # Update sheet & key column summary
-        if self.sheet_name and self.key_column:
-            sheet_key_ref.value = f"Sheet: {self.sheet_name}, Key: {self.key_column}"
-        else:
-            sheet_key_ref.value = "Not configured"
-
-        # Update template file summary
-        if self.template_path:
-            template_ref.value = Path(self.template_path).name
-        else:
-            template_ref.value = "Not selected"
-
-        # Update output folder summary
-        if self.output_dir:
-            output_ref.value = Path(self.output_dir).name
-        else:
-            output_ref.value = "Not selected"
-
         # Debug: Log current values
-        self.log_status(f"DEBUG: Summary update - source: {self.source_path}, sheet: {self.sheet_name}, key: {self.key_column}")
-        self.log_status(f"DEBUG: Summary update - template: {self.template_path}, output: {self.output_dir}")
+        self.log_status(f"DEBUG: Summary update - source: {self.source_field.value}, sheet: {self.sheet_dropdown.value}, key: {self.key_field.value}")
+        self.log_status(f"DEBUG: Summary update - template: {self.template_field.value}, output: {self.output_field.value}")
 
         # Update the page to reflect changes
         try:
@@ -1307,8 +1310,8 @@ class ExcelSplitterApp:
         if not self.source_field.value:
             return "Source Excel file is required"
         if not self.sheet_dropdown.value:
-            return "Sheet name is required"  
-        if not self.key_dropdown.value:
+            return "Sheet name is required"
+        if not self.key_field.value:
             return "Key column is required"
         if not self.template_field.value:
             return "Template file is required"
@@ -1395,15 +1398,11 @@ class ExcelSplitterApp:
     def log_status(self, message: str):
         """Add status message to the log"""
         def add_log():
-            log_item = ft.Container(
-                content=ft.Text(
-                    message,
-                    size=12,
-                    color=Colors.ON_SURFACE_VARIANT
-                ),
-                padding=ft.padding.symmetric(horizontal=10, vertical=5),
-                border_radius=5,
-                bgcolor=Colors.GREY_400
+            log_item = ft.Text(
+                message,
+                size=12,
+                color=Colors.WHITE,
+                weight=ft.FontWeight.W_400
             )
             
             self.status_log.controls.append(log_item)
@@ -1552,6 +1551,9 @@ class ExcelSplitterApp:
                 config.read(e.files[0].path)
 
                 if 'ExcelSplitter' in config:
+                    # Set loading flag to protect loaded values
+                    self.is_loading_config = True
+
                     # Load configuration values
                     section = config['ExcelSplitter']
 
@@ -1568,8 +1570,13 @@ class ExcelSplitterApp:
 
                     if 'key_column' in section and section['key_column']:
                         self.key_column = section['key_column']
-                        self.key_dropdown.value = self.key_column
-                        self.key_dropdown.update()
+                        self.key_field.value = self.key_column
+                        self.log_status(f"DEBUG: === CONFIG LOAD ===")
+                        self.log_status(f"DEBUG: Raw key_column from INI: '{section['key_column']}'")
+                        self.log_status(f"DEBUG: Set self.key_column to: '{self.key_column}'")
+                        self.log_status(f"DEBUG: Set key_field.value to: '{self.key_field.value}'")
+                        self.log_status(f"DEBUG: === END CONFIG LOAD ===")
+                        self.key_field.update()
 
                     if 'template_path' in section and section['template_path']:
                         self.template_path = section['template_path']
@@ -1639,13 +1646,60 @@ class ExcelSplitterApp:
                             for i in range(len(headers)):
                                 all_options.append(ft.dropdown.Option(f"{i+1}", f"Column {i+1}"))
 
-                            self.key_dropdown.options = all_options
-                            if self.key_column not in [opt.key for opt in all_options]:
-                                self.key_column = headers[0] if headers else ""
-                                self.key_dropdown.value = self.key_column
-                            self.key_dropdown.update()
+                            # For text field, validate the loaded key column value
+                            # Check if it's a valid column index or column name
+                            is_valid_column = False
+
+                            # Debug: Show current state before validation
+                            self.log_status(f"DEBUG: === KEY COLUMN VALIDATION ===")
+                            self.log_status(f"DEBUG: Current key_column value: '{self.key_column}'")
+                            self.log_status(f"DEBUG: Number of headers found: {len(headers)}")
+                            self.log_status(f"DEBUG: Headers: {headers}")
+
+                            # Check if it's a valid column index (1-based)
+                            try:
+                                col_idx = int(self.key_column)
+                                self.log_status(f"DEBUG: Parsed as integer: {col_idx}")
+                                if 1 <= col_idx <= len(headers):
+                                    is_valid_column = True
+                                    self.log_status(f"DEBUG: '{self.key_column}' is valid column index {col_idx} (1-based)")
+                                else:
+                                    self.log_status(f"DEBUG: '{self.key_column}' is out of range (1-{len(headers)})")
+                            except ValueError:
+                                self.log_status(f"DEBUG: '{self.key_column}' is not a valid integer")
+                                pass
+
+                            # Check if it's a valid column name
+                            if self.key_column in headers:
+                                is_valid_column = True
+                                self.log_status(f"DEBUG: '{self.key_column}' is valid column name")
+                            else:
+                                self.log_status(f"DEBUG: '{self.key_column}' is not found in headers")
+
+                            # Only default to first header if the loaded value is invalid
+                            if not is_valid_column and headers:
+                                self.log_status(f"DEBUG: '{self.key_column}' is invalid, defaulting to '{headers[0]}'")
+                                self.key_column = headers[0]
+                                self.key_field.value = self.key_column
+                            else:
+                                self.log_status(f"DEBUG: '{self.key_column}' is valid, keeping original value")
+                            self.key_field.update()
+                            self.log_status(f"DEBUG: Final key_field value after validation: '{self.key_field.value}'")
+                            self.log_status(f"DEBUG: === END VALIDATION ===")
+
+                            # Additional safety: Store the loaded value to prevent any other overrides
+                            loaded_key_column = self.key_column
                         except Exception as ex:
                             self.log_status(f"Warning: Could not refresh headers: {str(ex)}")
+
+                    # Final debug check
+                    self.log_status(f"DEBUG: === FINAL VALUES BEFORE PAGE UPDATE ===")
+                    self.log_status(f"DEBUG: self.key_column: '{self.key_column}'")
+                    self.log_status(f"DEBUG: self.key_field.value: '{self.key_field.value}'")
+                    self.log_status(f"DEBUG: === END FINAL CHECK ===")
+
+                    # Reset loading flag
+                    self.is_loading_config = False
 
                     self.page.update()
 
