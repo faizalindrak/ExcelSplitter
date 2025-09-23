@@ -28,6 +28,13 @@ try:
 except Exception:
     REPORTLAB_AVAILABLE = False
 
+# ==== (Opsional) xlwings untuk PDF via Excel COM ====
+try:
+    import xlwings as xw
+    XLWINGS_AVAILABLE = True
+except Exception:
+    XLWINGS_AVAILABLE = False
+
 
 # ----------------- Helpers -----------------
 
@@ -82,6 +89,45 @@ def export_pdf_via_lo(xlsx_path: Path, soffice_path: str | None = None):
     exe = soffice_path or "soffice"
     cmd = [exe, "--headless", "--convert-to", "pdf", "--outdir", str(xlsx_path.parent), str(xlsx_path)]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+def export_pdf_via_xlwings(xlsx_path: Path):
+    """Export Excel to PDF using xlwings (requires Excel installed on Windows)"""
+    if not XLWINGS_AVAILABLE:
+        raise RuntimeError("xlwings belum terpasang. Jalankan: pip install xlwings")
+
+    pdf_path = xlsx_path.with_suffix(".pdf")
+
+    # Use xlwings with invisible Excel application
+    app = None
+    wb = None
+    try:
+        # Create Excel application instance (invisible)
+        app = xw.App(visible=False, add_book=False)
+
+        # Open the workbook
+        wb = app.books.open(str(xlsx_path))
+
+        # Get the active worksheet
+        ws = wb.sheets.active
+
+        # Export to PDF with Excel's native formatting
+        # This preserves all Excel formatting, styles, colors, etc.
+        ws.to_pdf(str(pdf_path))
+
+    except Exception as e:
+        raise RuntimeError(f"Gagal export PDF via xlwings: {str(e)}")
+    finally:
+        # Clean up: close workbook and quit Excel
+        if wb:
+            try:
+                wb.close()
+            except:
+                pass
+        if app:
+            try:
+                app.quit()
+            except:
+                pass
 
 
 # ---------- ReportLab (pure-Python) PDF ----------
@@ -448,6 +494,8 @@ def split_excel_with_template(
                 export_pdf_pure(group, template_path, header_rows, xlsx_out.with_suffix(".pdf"))
             elif eng == "libreoffice":
                 export_pdf_via_lo(xlsx_out, soffice_path=soffice_path)
+            elif eng == "xlwings":
+                export_pdf_via_xlwings(xlsx_out)
 
     status_cb("Selesai.")
     progress_cb(total, total)
@@ -616,7 +664,7 @@ class SplitApp(ctk.CTk):
         self.btn_browse_outdir.grid(row=0, column=2, **pad)
 
         ctk.CTkLabel(output_tab, text="PDF Engine").grid(row=1, column=0, sticky="e", **pad)
-        pdf_combo = ctk.CTkComboBox(output_tab, values=["reportlab", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)
+        pdf_combo = ctk.CTkComboBox(output_tab, values=["reportlab", "libreoffice", "xlwings", "none"], variable=self.var_pdf_engine, width=200)
         pdf_combo.grid(row=1, column=1, sticky="w", **pad)
 
         ctk.CTkLabel(output_tab, text="LibreOffice (soffice.exe)").grid(row=2, column=0, sticky="e", **pad)
@@ -821,7 +869,18 @@ class SplitApp(ctk.CTk):
                     "ReportLab tidak tersedia",
                     "ReportLab belum terpasang di environment ini.\n"
                     "Jalankan: pip install reportlab\n"
-                    "Atau pilih PDF Engine: 'libreoffice' atau 'none'."
+                    "Atau pilih PDF Engine: 'libreoffice', 'xlwings', atau 'none'."
+                )
+                return
+
+            # Validasi xlwings bila dipilih
+            if pdf_engine == "xlwings" and not XLWINGS_AVAILABLE:
+                messagebox.showwarning(
+                    "xlwings tidak tersedia",
+                    "xlwings belum terpasang di environment ini.\n"
+                    "Jalankan: pip install xlwings\n"
+                    "Atau pilih PDF Engine: 'reportlab', 'libreoffice', atau 'none'.\n\n"
+                    "Catatan: xlwings memerlukan Microsoft Excel yang terinstall."
                 )
                 return
 
@@ -843,7 +902,7 @@ class SplitApp(ctk.CTk):
                     messagebox.showerror(
                         "Error",
                         "LibreOffice (soffice.exe) tidak ditemukan.\n"
-                        "Isi path LibreOffice atau pilih PDF Engine: 'reportlab' / 'none'."
+                        "Isi path LibreOffice atau pilih PDF Engine: 'reportlab', 'xlwings', atau 'none'."
                     )
                     return
 
