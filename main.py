@@ -18,16 +18,6 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-# ==== (Opsional) ReportLab untuk PDF pure-Python ====
-try:
-    from reportlab.lib.pagesizes import A4, LETTER, landscape, portrait
-    from reportlab.lib import colors
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-    REPORTLAB_AVAILABLE = True
-except Exception:
-    REPORTLAB_AVAILABLE = False
-
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
     import xlwings as xw
@@ -90,10 +80,204 @@ def export_pdf_via_lo(xlsx_path: Path, soffice_path: str | None = None):
     cmd = [exe, "--headless", "--convert-to", "pdf", "--outdir", str(xlsx_path.parent), str(xlsx_path)]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+def cleanup_excel_com():
+    """Clean up Excel COM objects and release resources"""
+    try:
+        # Try to release any existing COM objects
+        import gc
+        import pythoncom
+
+        # Force garbage collection
+        gc.collect()
+
+        # Uninitialize COM
+        try:
+            pythoncom.CoUninitialize()
+        except:
+            pass
+
+        # Re-initialize COM for next use
+        try:
+            pythoncom.CoInitialize()
+        except:
+            pass
+
+    except ImportError:
+        # pythoncom not available, try basic cleanup
+        import gc
+        gc.collect()
+    except:
+        pass
+
+def debug_excel_detection():
+    """Debug function to check Excel detection methods"""
+    results = []
+
+    results.append(f"XLWINGS_AVAILABLE: {XLWINGS_AVAILABLE}")
+
+    # Test Method 1: xlwings
+    if XLWINGS_AVAILABLE:
+        try:
+            import xlwings as xw
+            app = xw.App(visible=False, add_book=False)
+            if app is not None:
+                app.quit()
+                results.append("Method 1 (xlwings): SUCCESS")
+            else:
+                results.append("Method 1 (xlwings): FAILED - app is None")
+        except Exception as e:
+            results.append(f"Method 1 (xlwings): FAILED - {str(e)}")
+    else:
+        results.append("Method 1 (xlwings): SKIPPED - xlwings not available")
+
+    # Test Method 2: win32com.client.Dispatch
+    try:
+        import win32com.client
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.Quit()
+        del excel
+        results.append("Method 2 (win32com Dispatch): SUCCESS")
+    except Exception as e:
+        results.append(f"Method 2 (win32com Dispatch): FAILED - {str(e)}")
+
+    # Test Method 3: win32com.client.gencache.EnsureDispatch
+    try:
+        import win32com.client
+        excel = win32com.client.gencache.EnsureDispatch("Excel.Application")
+        excel.Visible = False
+        excel.Quit()
+        del excel
+        results.append("Method 3 (win32com EnsureDispatch): SUCCESS")
+    except Exception as e:
+        results.append(f"Method 3 (win32com EnsureDispatch): FAILED - {str(e)}")
+
+    # Test Method 4: Registry check
+    try:
+        import winreg
+        found_keys = []
+        key_paths = [
+            r"SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
+            r"SOFTWARE\Microsoft\Office\16.0\Excel\InstallRoot",
+            r"SOFTWARE\Microsoft\Office\15.0\Excel\InstallRoot",
+            r"SOFTWARE\Microsoft\Office\14.0\Excel\InstallRoot",
+            r"SOFTWARE\WOW6432Node\Microsoft\Office\16.0\Excel\InstallRoot",
+            r"SOFTWARE\WOW6432Node\Microsoft\Office\15.0\Excel\InstallRoot",
+            r"SOFTWARE\WOW6432Node\Microsoft\Office\14.0\Excel\InstallRoot",
+        ]
+
+        for key_path in key_paths:
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                winreg.CloseKey(key)
+                found_keys.append(key_path)
+            except:
+                continue
+
+        if found_keys:
+            results.append(f"Method 4 (Registry): Found {len(found_keys)} keys: {found_keys}")
+        else:
+            results.append("Method 4 (Registry): No Excel keys found")
+
+    except ImportError:
+        results.append("Method 4 (Registry): SKIPPED - winreg not available")
+    except Exception as e:
+        results.append(f"Method 4 (Registry): FAILED - {str(e)}")
+
+    return results
+
+def check_excel_availability():
+    """Check if Microsoft Excel is available for COM automation"""
+    try:
+        # Method 1: Try xlwings first (most reliable for xlwings usage)
+        if XLWINGS_AVAILABLE:
+            try:
+                import xlwings as xw
+                app = xw.App(visible=False, add_book=False)
+                if app is not None:
+                    app.quit()
+                    return True
+            except Exception:
+                pass
+
+        # Method 2: Try win32com.client
+        try:
+            import win32com.client
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.Quit()
+            del excel
+            return True
+        except Exception:
+            pass
+
+        # Method 3: Try alternative COM approach
+        try:
+            import win32com.client
+            excel = win32com.client.gencache.EnsureDispatch("Excel.Application")
+            excel.Visible = False
+            excel.Quit()
+            del excel
+            return True
+        except Exception:
+            pass
+
+        # Method 4: Check registry for Excel installation
+        try:
+            import winreg
+            key_paths = [
+                r"SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
+                r"SOFTWARE\Microsoft\Office\16.0\Excel\InstallRoot",
+                r"SOFTWARE\Microsoft\Office\15.0\Excel\InstallRoot",
+                r"SOFTWARE\Microsoft\Office\14.0\Excel\InstallRoot",
+                r"SOFTWARE\WOW6432Node\Microsoft\Office\16.0\Excel\InstallRoot",
+                r"SOFTWARE\WOW6432Node\Microsoft\Office\15.0\Excel\InstallRoot",
+                r"SOFTWARE\WOW6432Node\Microsoft\Office\14.0\Excel\InstallRoot",
+            ]
+
+            for key_path in key_paths:
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                    winreg.CloseKey(key)
+                    # Found Excel in registry, but still need to test COM
+                    try:
+                        import win32com.client
+                        excel = win32com.client.Dispatch("Excel.Application")
+                        excel.Visible = False
+                        excel.Quit()
+                        return True
+                    except:
+                        pass
+                except:
+                    continue
+        except ImportError:
+            pass  # winreg not available
+        except Exception:
+            pass
+
+        return False
+
+    except Exception:
+        return False
+    finally:
+        # Clean up after test
+        try:
+            cleanup_excel_com()
+        except:
+            pass
+
 def export_pdf_via_xlwings(xlsx_path: Path):
     """Export Excel to PDF using xlwings (requires Excel installed on Windows)"""
     if not XLWINGS_AVAILABLE:
         raise RuntimeError("xlwings belum terpasang. Jalankan: pip install xlwings")
+
+    # Clean up COM objects only (safe cleanup)
+    cleanup_excel_com()
+
+    # Check if Excel is available before proceeding
+    if not check_excel_availability():
+        raise RuntimeError("Microsoft Excel tidak terinstall atau tidak dapat diakses. "
+                          "Gunakan PDF Engine 'libreoffice' atau 'none' sebagai alternatif.")
 
     pdf_path = xlsx_path.with_suffix(".pdf")
 
@@ -104,130 +288,64 @@ def export_pdf_via_xlwings(xlsx_path: Path):
         # Create Excel application instance (invisible)
         app = xw.App(visible=False, add_book=False)
 
+        # Verify app was created successfully
+        if app is None:
+            raise RuntimeError("Failed to create Excel application instance")
+
         # Open the workbook
         wb = app.books.open(str(xlsx_path))
 
+        if wb is None:
+            raise RuntimeError(f"Failed to open workbook: {xlsx_path}")
+
         # Get the active worksheet
         ws = wb.sheets.active
+
+        if ws is None:
+            raise RuntimeError("Failed to get active worksheet")
 
         # Export to PDF with Excel's native formatting
         # This preserves all Excel formatting, styles, colors, etc.
         ws.to_pdf(str(pdf_path))
 
+        # Verify PDF was created
+        if not pdf_path.exists():
+            raise RuntimeError(f"PDF was not created: {pdf_path}")
+
     except Exception as e:
-        raise RuntimeError(f"Gagal export PDF via xlwings: {str(e)}")
+        # More detailed error reporting
+        error_details = str(e)
+        if "apps" in error_details.lower() or "nonetype" in error_details.lower():
+            error_details = ("Excel COM interface tidak dapat diakses. "
+                           "Pastikan Microsoft Excel terinstall dan tidak sedang digunakan aplikasi lain. "
+                           "Alternatif: gunakan PDF Engine 'libreoffice' atau 'none'.")
+        raise RuntimeError(f"Gagal export PDF via xlwings: {error_details}")
     finally:
         # Clean up: close workbook and quit Excel
-        if wb:
+        if wb is not None:
             try:
                 wb.close()
             except:
                 pass
-        if app:
+        if app is not None:
             try:
                 app.quit()
             except:
                 pass
 
+        # Safe COM cleanup only after each PDF export
+        cleanup_excel_com()
 
-# ---------- ReportLab (pure-Python) PDF ----------
-PAPER_MAP = {9: A4, 1: LETTER}
-
-def _excel_col_width_to_points(w):
-    return float(w) * 7.0 * 0.75 if w else 50.0
-
-def _page_setup_from_template(ws):
-    ps = ws.page_setup
-    paper = PAPER_MAP.get(ps.paperSize, A4)
-    orientation = str(getattr(ps, "orientation", "portrait")).lower()
-    paper = landscape(paper) if orientation == "landscape" else portrait(paper)
-    pm = ws.page_margins
-    return paper, {
-        "left": (pm.left or 0.7) * inch,
-        "right": (pm.right or 0.7) * inch,
-        "top": (pm.top or 0.75) * inch,
-        "bottom": (pm.bottom or 0.75) * inch,
-    }
-
-def export_pdf_pure(group_df: pd.DataFrame, template_path: Path, header_rows: int, pdf_out: Path):
-    if not REPORTLAB_AVAILABLE:
-        raise RuntimeError("ReportLab belum terpasang. Jalankan: pip install reportlab")
-
-    wb = load_workbook(template_path, read_only=True, data_only=True)
-    ws = wb.active
-
-    templ_headers, hidden_cols_idx, col_width_pts = [], set(), []
-    empty_streak, c = 0, 1
-    while c <= 500 and empty_streak < 5:
-        val = ws.cell(row=header_rows, column=c).value
-        col_dim = ws.column_dimensions.get(ws.cell(row=1, column=c).column_letter)
-        hidden = bool(getattr(col_dim, "hidden", False))
-        width = getattr(col_dim, "width", None)
-        if val is None and width is None:
-            empty_streak += 1
-        else:
-            empty_streak = 0
-        templ_headers.append("" if val is None else str(val))
-        if hidden:
-            hidden_cols_idx.add(c - 1)
-        col_width_pts.append(_excel_col_width_to_points(width))
-        c += 1
-    wb.close()
-
-    # Map urutan kolom mengikuti header template bila cocok
-    if templ_headers and any(h.strip() for h in templ_headers):
-        ordered = [h for h in templ_headers if h and h in group_df.columns]
-        if ordered:
-            df = group_df[ordered].copy()
-            keep_idx = [templ_headers.index(h) for h in ordered]
-            col_width_pts = [col_width_pts[idx] for idx in keep_idx]
-            hidden_cols_idx = {i for i in range(len(keep_idx)) if keep_idx[i] in hidden_cols_idx}
-        else:
-            df = group_df.copy()
-    else:
-        df = group_df.copy()
-
-    # Drop kolom hidden
-    keep_cols = [i for i in range(len(df.columns)) if i not in hidden_cols_idx] or list(range(len(df.columns)))
-    df = df.iloc[:, keep_cols]
-    col_width_pts = [col_width_pts[i] for i in keep_cols]
-
-    # Susun data tabel (header + isi)
-    table_data = [list(df.columns.astype(str))] + df.fillna("").astype(str).values.tolist()
-
-    # Page setup
-    pagesize, margins = _page_setup_from_template(ws)
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-    from reportlab.lib import colors
-    doc = SimpleDocTemplate(
-        str(pdf_out),
-        pagesize=pagesize,
-        leftMargin=margins["left"],
-        rightMargin=margins["right"],
-        topMargin=margins["top"],
-        bottomMargin=margins["bottom"],
-        title=pdf_out.stem,
-    )
-
-    tbl = Table(table_data, colWidths=col_width_pts or None, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 9),
-        ("FONTSIZE", (0, 1), (-1, -1), 9),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
-        ("LINEABOVE", (0, 0), (-1, 0), 0.75, colors.black),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F0F0")),
-    ]))
-    doc.build([tbl])
+        # Give a moment for cleanup to complete
+        import time
+        time.sleep(0.5)
 
 
 # ----------------- Split Logic -----------------
 
 def split_excel_with_template(
     source_path: Path, sheet_name: str, key_col, template_path: Path, out_dir: Path,
-    header_rows: int, pdf_engine: str = "reportlab", soffice_path: str | None = None,
+    header_rows: int, pdf_engine: str = "xlwings", soffice_path: str | None = None,
     prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None
 ):
     if status_cb is None: status_cb = lambda msg: None
@@ -490,15 +608,17 @@ def split_excel_with_template(
         # 2) PDF (opsional)
         eng = (pdf_engine or "none").lower()
         if eng != "none":
-            if eng == "reportlab":
-                export_pdf_pure(group, template_path, header_rows, xlsx_out.with_suffix(".pdf"))
-            elif eng == "libreoffice":
+            if eng == "libreoffice":
                 export_pdf_via_lo(xlsx_out, soffice_path=soffice_path)
             elif eng == "xlwings":
                 export_pdf_via_xlwings(xlsx_out)
 
     status_cb("Selesai.")
     progress_cb(total, total)
+
+    # Final cleanup for Excel COM sessions
+    if (pdf_engine or "none").lower() == "xlwings":
+        cleanup_excel_com()
 
 
 # ----------------- GUI -----------------
@@ -517,7 +637,7 @@ class SplitApp(ctk.CTk):
         self.var_template = tk.StringVar()
         self.var_outdir = tk.StringVar()
         self.var_header_rows = tk.IntVar(value=5)
-        self.var_pdf_engine = tk.StringVar(value="reportlab")
+        self.var_pdf_engine = tk.StringVar(value="xlwings")
         self.var_lo_path = tk.StringVar()
         self.var_prefix = tk.StringVar(value="")
         self.var_suffix = tk.StringVar(value="")
@@ -664,7 +784,7 @@ class SplitApp(ctk.CTk):
         self.btn_browse_outdir.grid(row=0, column=2, **pad)
 
         ctk.CTkLabel(output_tab, text="PDF Engine").grid(row=1, column=0, sticky="e", **pad)
-        pdf_combo = ctk.CTkComboBox(output_tab, values=["reportlab", "libreoffice", "xlwings", "none"], variable=self.var_pdf_engine, width=200)
+        pdf_combo = ctk.CTkComboBox(output_tab, values=["xlwings", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)
         pdf_combo.grid(row=1, column=1, sticky="w", **pad)
 
         ctk.CTkLabel(output_tab, text="LibreOffice (soffice.exe)").grid(row=2, column=0, sticky="e", **pad)
@@ -720,6 +840,11 @@ class SplitApp(ctk.CTk):
         btns.pack(fill="x", padx=12, pady=(10, 4))
         self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked)
         self.btn_run.pack(side="left", padx=(0, 8))
+        self.btn_open_output = ctk.CTkButton(btns, text="Open Output Folder", height=44, command=self.open_output_folder)
+        self.btn_open_output.pack(side="left", padx=(0, 8))
+        self.btn_open_output.pack_forget()  # Hide initially
+        self.btn_debug = ctk.CTkButton(btns, text="Debug Excel", height=44, command=self.debug_excel, fg_color="gray")
+        self.btn_debug.pack(side="left", padx=(0, 8))
 
         # PROGRESS + LOG
         self.pbar = ctk.CTkProgressBar(actions_tab, mode="determinate", width=640)
@@ -727,6 +852,49 @@ class SplitApp(ctk.CTk):
         self.pbar.set(0.0)
         self.txt_status = ctk.CTkTextbox(actions_tab, height=300)
         self.txt_status.pack(fill="both", expand=True, padx=12, pady=(10, 14))
+
+    def debug_excel(self):
+        """Debug Excel detection and show results"""
+        try:
+            self.log("=== Excel Detection Debug ===")
+            results = debug_excel_detection()
+            for result in results:
+                self.log(result)
+
+            # Also test the main check function
+            excel_available = check_excel_availability()
+            self.log(f"Final check_excel_availability(): {excel_available}")
+            self.log("=== Debug selesai ===")
+
+            if excel_available:
+                messagebox.showinfo("Debug Excel", "Excel terdeteksi dan dapat diakses!")
+            else:
+                messagebox.showwarning("Debug Excel", "Excel tidak dapat diakses. Lihat log untuk detail.")
+
+        except Exception as e:
+            self.log(f"Error saat debug: {str(e)}")
+            messagebox.showerror("Debug Error", f"Gagal debug: {str(e)}")
+
+    def open_output_folder(self):
+        """Open the output folder in Windows Explorer"""
+        out_dir = self.var_outdir.get().strip()
+        if out_dir and Path(out_dir).exists():
+            try:
+                # Convert forward slashes to backslashes for Windows
+                win_path = str(Path(out_dir).resolve())
+
+                # Use Windows explorer with proper path handling
+                # Method 1: Try with shell=True (handles spaces better)
+                try:
+                    subprocess.run(f'explorer "{win_path}"', shell=True, check=True)
+                except subprocess.CalledProcessError:
+                    # Method 2: Alternative approach using start command
+                    subprocess.run(['cmd', '/c', 'start', '', win_path], check=True)
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open output folder: {str(e)}")
+        else:
+            messagebox.showwarning("Warning", "Output folder not set or doesn't exist")
 
     # ------------- UI Helpers -------------
 
@@ -759,6 +927,16 @@ class SplitApp(ctk.CTk):
         self.configure(cursor="watch" if busy else "")
         if not busy:
             self.pbar.set(0.0)
+
+    def show_open_output_button(self):
+        """Show the open output folder button after successful generation"""
+        self.after(0, self._show_open_output_button_impl)
+
+    def _show_open_output_button_impl(self):
+        try:
+            self.btn_open_output.pack(side="left", padx=(0, 8))
+        except AttributeError:
+            pass  # UI being recreated
 
     # ------------- Browse & Load -------------
 
@@ -863,26 +1041,50 @@ class SplitApp(ctk.CTk):
             except ValueError:
                 key_col = key_raw  # pakai header name
 
-            # Validasi ReportLab bila dipilih
-            if pdf_engine == "reportlab" and not REPORTLAB_AVAILABLE:
-                messagebox.showwarning(
-                    "ReportLab tidak tersedia",
-                    "ReportLab belum terpasang di environment ini.\n"
-                    "Jalankan: pip install reportlab\n"
-                    "Atau pilih PDF Engine: 'libreoffice', 'xlwings', atau 'none'."
-                )
-                return
-
             # Validasi xlwings bila dipilih
-            if pdf_engine == "xlwings" and not XLWINGS_AVAILABLE:
-                messagebox.showwarning(
-                    "xlwings tidak tersedia",
-                    "xlwings belum terpasang di environment ini.\n"
-                    "Jalankan: pip install xlwings\n"
-                    "Atau pilih PDF Engine: 'reportlab', 'libreoffice', atau 'none'.\n\n"
-                    "Catatan: xlwings memerlukan Microsoft Excel yang terinstall."
-                )
-                return
+            if pdf_engine == "xlwings":
+                if not XLWINGS_AVAILABLE:
+                    messagebox.showwarning(
+                        "xlwings tidak tersedia",
+                        "xlwings belum terpasang di environment ini.\n"
+                        "Jalankan: pip install xlwings\n"
+                        "Atau pilih PDF Engine: 'libreoffice' atau 'none'.\n\n"
+                        "Catatan: xlwings memerlukan Microsoft Excel yang terinstall."
+                    )
+                    return
+                elif not check_excel_availability():
+                    # Check if it's a pywin32 issue
+                    try:
+                        import win32com.client
+                        pywin32_available = True
+                    except ImportError:
+                        pywin32_available = False
+
+                    if not pywin32_available:
+                        messagebox.showwarning(
+                            "pywin32 tidak tersedia",
+                            "Microsoft Excel terinstall, tetapi pywin32 tidak tersedia.\n\n"
+                            "Solusi:\n"
+                            "1. Install pywin32: pip install pywin32\n"
+                            "2. Atau gunakan conda: conda install pywin32\n"
+                            "3. Restart aplikasi setelah install\n\n"
+                            "Alternatif sementara:\n"
+                            "- Pilih PDF Engine: 'libreoffice'\n"
+                            "- Pilih PDF Engine: 'none' (hanya Excel files)"
+                        )
+                    else:
+                        messagebox.showwarning(
+                            "Microsoft Excel tidak dapat diakses",
+                            "Microsoft Excel terinstall tetapi tidak dapat diakses via COM.\n\n"
+                            "Solusi:\n"
+                            "1. Tutup semua Excel yang terbuka\n"
+                            "2. Restart aplikasi ini\n"
+                            "3. Coba lagi\n\n"
+                            "Alternatif:\n"
+                            "- Pilih PDF Engine: 'libreoffice'\n"
+                            "- Pilih PDF Engine: 'none' (hanya Excel files)"
+                        )
+                    return
 
             # Deteksi LibreOffice jika dipilih
             soffice_path = None
@@ -902,12 +1104,17 @@ class SplitApp(ctk.CTk):
                     messagebox.showerror(
                         "Error",
                         "LibreOffice (soffice.exe) tidak ditemukan.\n"
-                        "Isi path LibreOffice atau pilih PDF Engine: 'reportlab', 'xlwings', atau 'none'."
+                        "Isi path LibreOffice atau pilih PDF Engine: 'xlwings' atau 'none'."
                     )
                     return
 
             self.set_busy(True)
             self.log("Mulai generate...")
+
+            # Auto cleanup before generation if using xlwings
+            if pdf_engine == "xlwings":
+                self.log("Membersihkan Excel COM sessions sebelum generate...")
+                cleanup_excel_com()
 
             def worker():
                 try:
@@ -926,6 +1133,10 @@ class SplitApp(ctk.CTk):
                         progress_cb=self.set_progress
                     )
                     self.log("Selesai.")
+                    self.show_open_output_button()
+                    # Final cleanup after successful generation
+                    if pdf_engine == "xlwings":
+                        cleanup_excel_com()
                     self.after(0, lambda: messagebox.showinfo("Selesai", "Proses selesai."))
                 except subprocess.CalledProcessError as e:
                     try:
@@ -998,7 +1209,7 @@ class SplitApp(ctk.CTk):
             self.var_keycol.set(cfg.get("source", "key_col", fallback=""))
 
             self.var_outdir.set(cfg.get("output", "output_dir", fallback=""))
-            self.var_pdf_engine.set(cfg.get("output", "pdf_engine", fallback="reportlab").lower())
+            self.var_pdf_engine.set(cfg.get("output", "pdf_engine", fallback="xlwings").lower())
             self.var_lo_path.set(cfg.get("output", "libreoffice_path", fallback=""))
             self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
             self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
