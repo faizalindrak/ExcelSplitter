@@ -4,7 +4,11 @@
 # Catatan:
 # - console=False => tidak munculkan jendela console
 # - Mengumpulkan data/hiddenimports untuk reportlab, openpyxl, pandas, customtkinter
+# - Termasuk pywin32 dan xlwings untuk Excel COM automation
 # - Jika ingin icon, set ICON_PATH di bawah.
+#
+# Dependencies yang dibutuhkan:
+# pip install pandas openpyxl customtkinter reportlab xlwings pywin32
 
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 from PyInstaller.building.build_main import Analysis, PYZ, EXE
@@ -38,6 +42,58 @@ hiddenimports += collect_submodules("pandas")
 # customtkinter (tema/gambar jika ada)
 datas += collect_data_files("customtkinter", include_py_files=False)
 hiddenimports += collect_submodules("customtkinter")
+
+# xlwings (Excel COM automation)
+try:
+    datas += collect_data_files("xlwings", include_py_files=False)
+    hiddenimports += collect_submodules("xlwings")
+except:
+    pass  # xlwings mungkin tidak terpasang
+
+# pywin32 (Windows COM interface)
+try:
+    hiddenimports += collect_submodules("win32com")
+    hiddenimports += collect_submodules("pythoncom")
+    hiddenimports += collect_submodules("pywintypes")
+    hiddenimports += collect_submodules("win32api")
+    hiddenimports += collect_submodules("win32gui")
+    hiddenimports += collect_submodules("win32con")
+
+    # Tambahan hidden imports yang sering dibutuhkan
+    hiddenimports += [
+        "win32com.client",
+        "win32com.client.gencache",
+        "win32com.gen_py",
+        "pythoncom",
+        "pywintypes",
+        "win32timezone"
+    ]
+except:
+    pass  # pywin32 mungkin tidak terpasang
+
+# psutil (untuk process management, opsional)
+try:
+    hiddenimports += collect_submodules("psutil")
+except:
+    pass
+
+# winreg (Windows registry, biasanya built-in tapi kadang perlu explicit)
+try:
+    hiddenimports += ["winreg"]
+except:
+    pass
+
+# Tambahan imports untuk Excel COM yang sering missing
+hiddenimports += [
+    "pkg_resources.py2_warn",
+    "pkg_resources.markers",
+    "email.mime.multipart",
+    "email.mime.text",
+    "email.mime.base",
+    "encodings.idna",
+    "encodings.utf_8",
+    "encodings.cp1252"
+]
 
 # tkinter assets (umumnya sudah di-bundle otomatis oleh PyInstaller)
 # Tidak perlu tambahan khusus, tapi tetap aman bila runtime berbeda.

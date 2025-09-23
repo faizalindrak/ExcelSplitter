@@ -15,7 +15,9 @@ pyinstaller==6.16.0
 pyinstaller-hooks-contrib==2025.8
 python-dateutil==2.9.0.post0
 pytz==2025.2
+pywin32
 pywin32-ctypes==0.2.3
+reportlab
 setuptools==80.9.0
 six==1.17.0
 tzdata==2025.2

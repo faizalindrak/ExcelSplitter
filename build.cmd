@@ -27,7 +27,7 @@ goto USE_UV
 echo [INFO] Menggunakan pip
 "%PY_EXE%" -m pip install --upgrade pip setuptools wheel || echo [WARN] Gagal upgrade pip
 echo [INFO] Install dependencies (pip)
-"%PIP_EXE%" install --upgrade pyinstaller customtkinter pandas openpyxl reportlab || goto FAIL
+"%PIP_EXE%" install --upgrade pyinstaller customtkinter pandas openpyxl reportlab xlwings pywin32 || goto FAIL
 
 echo [INFO] Build exe (pip)
 if exist "main.spec" (
@@ -50,7 +50,7 @@ if exist requirements.txt (
   uv pip sync requirements.txt || goto FAIL
 ) else (
   echo [INFO] Install dependencies (uv)
-  uv pip install pyinstaller customtkinter pandas openpyxl reportlab || goto FAIL
+  uv pip install pyinstaller customtkinter pandas openpyxl reportlab xlwings pywin32 || goto FAIL
 )
 
 echo [INFO] Build exe via uv run
