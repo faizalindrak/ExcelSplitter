@@ -461,7 +461,7 @@ class SplitApp(ctk.CTk):
         self.title("Excel Splitter (Template-based)")
         self.geometry("980x700")
         ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("green")
+        ctk.set_default_color_theme("blue")
 
         self.var_source = tk.StringVar()
         self.var_sheet = tk.StringVar()
@@ -473,73 +473,212 @@ class SplitApp(ctk.CTk):
         self.var_lo_path = tk.StringVar()
         self.var_prefix = tk.StringVar(value="")
         self.var_suffix = tk.StringVar(value="")
+        self.var_theme = tk.StringVar(value="blue")
+        self.var_loaded_ini = tk.StringVar(value="")
 
         self.is_running = False
         self.worker_thread = None
+
+        # Add validation traces
+        self.var_source.trace_add("write", self.validate_source)
+        self.var_template.trace_add("write", self.validate_template)
+        self.var_outdir.trace_add("write", self.validate_outdir)
+        self.var_lo_path.trace_add("write", self.validate_lo_path)
+
         self._build_ui()
+
+    def change_theme(self, theme):
+        ctk.set_default_color_theme(theme)
+        # Destroy current UI and rebuild with new theme
+        for widget in self.winfo_children():
+            if widget != self:  # Don't destroy the root window
+                widget.destroy()
+        self._build_ui()
+        messagebox.showinfo("Theme Changed", f"Theme changed to {theme} successfully!")
+
+    def validate_source(self, *args):
+        path = self.var_source.get().strip()
+        if path and Path(path).exists() and Path(path).is_file():
+            # Valid file
+            if hasattr(self, 'entry_source'):
+                self.entry_source.configure(border_color="#00FF00")  # Green
+        else:
+            if hasattr(self, 'entry_source'):
+                self.entry_source.configure(border_color="#FF0000")  # Red
+
+    def validate_template(self, *args):
+        path = self.var_template.get().strip()
+        if path and Path(path).exists() and Path(path).is_file():
+            if hasattr(self, 'entry_template'):
+                self.entry_template.configure(border_color="#00FF00")
+        else:
+            if hasattr(self, 'entry_template'):
+                self.entry_template.configure(border_color="#FF0000")
+
+    def validate_outdir(self, *args):
+        path = self.var_outdir.get().strip()
+        if path and Path(path).exists() and Path(path).is_dir():
+            if hasattr(self, 'entry_outdir'):
+                self.entry_outdir.configure(border_color="#00FF00")
+        else:
+            if hasattr(self, 'entry_outdir'):
+                self.entry_outdir.configure(border_color="#FF0000")
+
+    def validate_lo_path(self, *args):
+        path = self.var_lo_path.get().strip()
+        if not path or (Path(path).exists() and Path(path).is_file()):
+            if hasattr(self, 'entry_lo_path'):
+                self.entry_lo_path.configure(border_color="#00FF00")
+        else:
+            if hasattr(self, 'entry_lo_path'):
+                self.entry_lo_path.configure(border_color="#FF0000")
 
     def _build_ui(self):
         pad = {"padx": 12, "pady": 10}
-        frame = ctk.CTkFrame(self); frame.pack(fill="both", expand=True, padx=16, pady=16)
 
-        # SOURCE
-        ctk.CTkLabel(frame, text="Source Excel").grid(row=0, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_source, width=520).grid(row=0, column=1, sticky="we", **pad)
-        ctk.CTkButton(frame, text="Browse...", command=self.browse_source).grid(row=0, column=2, **pad)
+        # Main container
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
 
-        ctk.CTkLabel(frame, text="Sheet Name").grid(row=1, column=0, sticky="e", **pad)
-        self.cmb_sheet = ctk.CTkComboBox(frame, values=[], variable=self.var_sheet, width=240)
+        # Top bar with left and right sections
+        top_frame = ctk.CTkFrame(main_frame)
+        top_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        # Left section: Save/Load buttons
+        left_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        left_frame.pack(side="left")
+        self.btn_save_top = ctk.CTkButton(left_frame, text="Save .ini", command=self.save_ini, width=80)
+        self.btn_save_top.pack(side="left", padx=(0, 8))
+        self.btn_load_top = ctk.CTkButton(left_frame, text="Load .ini", command=self.load_ini, width=80)
+        self.btn_load_top.pack(side="left", padx=(0, 8))
+        self.lbl_loaded_ini = ctk.CTkLabel(left_frame, textvariable=self.var_loaded_ini, fg_color="transparent")
+        self.lbl_loaded_ini.pack(side="left")
+
+        # Right section: Theme selector
+        right_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        right_frame.pack(side="right")
+        ctk.CTkLabel(right_frame, text="Theme:").pack(side="left", padx=(0, 5))
+        theme_combo = ctk.CTkComboBox(right_frame, values=["blue", "green", "dark-blue"], variable=self.var_theme, width=120, command=self.change_theme)
+        theme_combo.pack(side="left")
+
+        # Tabview
+        self.tabview = ctk.CTkTabview(main_frame, width=800, height=600)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Create tabs
+        self.tabview.add("Input")
+        self.tabview.add("Template")
+        self.tabview.add("Output")
+        self.tabview.add("Actions")
+
+        # INPUT TAB
+        input_tab = self.tabview.tab("Input")
+        ctk.CTkLabel(input_tab, text="Source Excel").grid(row=0, column=0, sticky="e", **pad)
+        self.entry_source = ctk.CTkEntry(input_tab, textvariable=self.var_source, width=520)
+        self.entry_source.grid(row=0, column=1, sticky="we", **pad)
+        self.btn_browse_source = ctk.CTkButton(input_tab, text="Browse...", command=self.browse_source)
+        self.btn_browse_source.grid(row=0, column=2, **pad)
+
+        ctk.CTkLabel(input_tab, text="Sheet Name").grid(row=1, column=0, sticky="e", **pad)
+        self.cmb_sheet = ctk.CTkComboBox(input_tab, values=[], variable=self.var_sheet, width=240)
         self.cmb_sheet.grid(row=1, column=1, sticky="w", **pad)
-        ctk.CTkButton(frame, text="Load Sheets", command=self.load_sheets).grid(row=1, column=2, **pad)
+        self.btn_load_sheets = ctk.CTkButton(input_tab, text="Load Sheets", command=self.load_sheets)
+        self.btn_load_sheets.grid(row=1, column=2, **pad)
 
-        ctk.CTkLabel(frame, text="Key Column (header or index)").grid(row=2, column=0, sticky="e", **pad)
-        self.cmb_key = ctk.CTkComboBox(frame, values=[], variable=self.var_keycol, width=240)
+        ctk.CTkLabel(input_tab, text="Key Column (header or index)").grid(row=2, column=0, sticky="e", **pad)
+        self.cmb_key = ctk.CTkComboBox(input_tab, values=[], variable=self.var_keycol, width=240)
         self.cmb_key.grid(row=2, column=1, sticky="w", **pad)
-        ctk.CTkButton(frame, text="Load Headers", command=self.load_headers).grid(row=2, column=2, **pad)
+        self.btn_load_headers = ctk.CTkButton(input_tab, text="Load Headers", command=self.load_headers)
+        self.btn_load_headers.grid(row=2, column=2, **pad)
 
-        # TEMPLATE
-        ctk.CTkLabel(frame, text="Template Excel").grid(row=3, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_template, width=520).grid(row=3, column=1, sticky="we", **pad)
-        ctk.CTkButton(frame, text="Browse...", command=self.browse_template).grid(row=3, column=2, **pad)
+        input_tab.grid_columnconfigure(1, weight=1)
 
-        # OUTPUT
-        ctk.CTkLabel(frame, text="Output Folder").grid(row=4, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_outdir, width=520).grid(row=4, column=1, sticky="we", **pad)
-        ctk.CTkButton(frame, text="Browse...", command=self.browse_outdir).grid(row=4, column=2, **pad)
+        # TEMPLATE TAB
+        template_tab = self.tabview.tab("Template")
+        ctk.CTkLabel(template_tab, text="Template Excel").grid(row=0, column=0, sticky="e", **pad)
+        self.entry_template = ctk.CTkEntry(template_tab, textvariable=self.var_template, width=520)
+        self.entry_template.grid(row=0, column=1, sticky="we", **pad)
+        self.btn_browse_template = ctk.CTkButton(template_tab, text="Browse...", command=self.browse_template)
+        self.btn_browse_template.grid(row=0, column=2, **pad)
 
-        # OPTIONS
-        ctk.CTkLabel(frame, text="HEADER_ROWS").grid(row=5, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_header_rows, width=80).grid(row=5, column=1, sticky="w", **pad)
+        ctk.CTkLabel(template_tab, text="HEADER_ROWS").grid(row=1, column=0, sticky="e", **pad)
+        header_entry = ctk.CTkEntry(template_tab, textvariable=self.var_header_rows, width=80)
+        header_entry.grid(row=1, column=1, sticky="w", **pad)
 
-        ctk.CTkLabel(frame, text="PDF Engine").grid(row=6, column=0, sticky="e", **pad)
-        ctk.CTkComboBox(frame, values=["reportlab", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)\
-            .grid(row=6, column=1, sticky="w", **pad)
+        template_tab.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(frame, text="LibreOffice (soffice.exe)").grid(row=7, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_lo_path, width=520).grid(row=7, column=1, sticky="we", **pad)
-        ctk.CTkButton(frame, text="Browse...", command=self.browse_soffice).grid(row=7, column=2, **pad)
+        # OUTPUT TAB
+        output_tab = self.tabview.tab("Output")
+        ctk.CTkLabel(output_tab, text="Output Folder").grid(row=0, column=0, sticky="e", **pad)
+        self.entry_outdir = ctk.CTkEntry(output_tab, textvariable=self.var_outdir, width=520)
+        self.entry_outdir.grid(row=0, column=1, sticky="we", **pad)
+        self.btn_browse_outdir = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_outdir)
+        self.btn_browse_outdir.grid(row=0, column=2, **pad)
 
-        ctk.CTkLabel(frame, text="Prefix").grid(row=8, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_prefix, width=240).grid(row=8, column=1, sticky="w", **pad)
+        ctk.CTkLabel(output_tab, text="PDF Engine").grid(row=1, column=0, sticky="e", **pad)
+        pdf_combo = ctk.CTkComboBox(output_tab, values=["reportlab", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)
+        pdf_combo.grid(row=1, column=1, sticky="w", **pad)
 
-        ctk.CTkLabel(frame, text="Suffix").grid(row=9, column=0, sticky="e", **pad)
-        ctk.CTkEntry(frame, textvariable=self.var_suffix, width=240).grid(row=9, column=1, sticky="w", **pad)
+        ctk.CTkLabel(output_tab, text="LibreOffice (soffice.exe)").grid(row=2, column=0, sticky="e", **pad)
+        self.entry_lo_path = ctk.CTkEntry(output_tab, textvariable=self.var_lo_path, width=520)
+        self.entry_lo_path.grid(row=2, column=1, sticky="we", **pad)
+        self.btn_browse_soffice = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_soffice)
+        self.btn_browse_soffice.grid(row=2, column=2, **pad)
 
-        # ACTIONS
-        btns = ctk.CTkFrame(frame); btns.grid(row=10, column=0, columnspan=3, sticky="we", padx=12, pady=(4, 0))
-        self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked); self.btn_run.pack(side="left", padx=(0, 8))
-        self.btn_save = ctk.CTkButton(btns, text="Save .ini", command=self.save_ini); self.btn_save.pack(side="left", padx=8)
-        self.btn_load = ctk.CTkButton(btns, text="Load .ini", command=self.load_ini); self.btn_load.pack(side="left", padx=8)
+        ctk.CTkLabel(output_tab, text="Prefix").grid(row=3, column=0, sticky="e", **pad)
+        prefix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_prefix, width=240)
+        prefix_entry.grid(row=3, column=1, sticky="w", **pad)
+
+        ctk.CTkLabel(output_tab, text="Suffix").grid(row=4, column=0, sticky="e", **pad)
+        suffix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_suffix, width=240)
+        suffix_entry.grid(row=4, column=1, sticky="w", **pad)
+
+        output_tab.grid_columnconfigure(1, weight=1)
+
+        # ACTIONS TAB
+        actions_tab = self.tabview.tab("Actions")
+
+        # Configuration Summary
+        summary_frame = ctk.CTkFrame(actions_tab)
+        summary_frame.pack(fill="x", padx=12, pady=(10, 10))
+
+        ctk.CTkLabel(summary_frame, text="Configuration Summary", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5))
+
+        # Create summary labels
+        self.summary_labels = {}
+        config_items = [
+            ("Source File", self.var_source),
+            ("Sheet Name", self.var_sheet),
+            ("Key Column", self.var_keycol),
+            ("Template File", self.var_template),
+            ("Header Rows", self.var_header_rows),
+            ("Output Folder", self.var_outdir),
+            ("PDF Engine", self.var_pdf_engine),
+            ("LibreOffice Path", self.var_lo_path),
+            ("Prefix", self.var_prefix),
+            ("Suffix", self.var_suffix),
+        ]
+
+        for label_text, var in config_items:
+            row_frame = ctk.CTkFrame(summary_frame, fg_color="transparent")
+            row_frame.pack(fill="x", padx=10, pady=0)
+            ctk.CTkLabel(row_frame, text=f"{label_text}:", width=120, anchor="w").pack(side="left")
+            value_label = ctk.CTkLabel(row_frame, textvariable=var, anchor="w")
+            value_label.pack(side="left", fill="x", expand=True)
+            self.summary_labels[label_text] = value_label
+
+        # Buttons
+        btns = ctk.CTkFrame(actions_tab)
+        btns.pack(fill="x", padx=12, pady=(10, 4))
+        self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked)
+        self.btn_run.pack(side="left", padx=(0, 8))
 
         # PROGRESS + LOG
-        self.pbar = ctk.CTkProgressBar(frame, mode="determinate", width=640)
-        self.pbar.grid(row=11, column=0, columnspan=3, sticky="we", padx=12, pady=(14, 4))
+        self.pbar = ctk.CTkProgressBar(actions_tab, mode="determinate", width=640)
+        self.pbar.pack(fill="x", padx=12, pady=(14, 4))
         self.pbar.set(0.0)
-        self.txt_status = ctk.CTkTextbox(frame, height=300)
-        self.txt_status.grid(row=12, column=0, columnspan=3, sticky="nsew", padx=12, pady=(10, 14))
-
-        frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(12, weight=1)
+        self.txt_status = ctk.CTkTextbox(actions_tab, height=300)
+        self.txt_status.pack(fill="both", expand=True, padx=12, pady=(10, 14))
 
     # ------------- UI Helpers -------------
 
@@ -563,9 +702,12 @@ class SplitApp(ctk.CTk):
     def _set_busy_impl(self, busy: bool):
         self.is_running = busy
         state = "disabled" if busy else "normal"
-        self.btn_run.configure(state=state)
-        self.btn_save.configure(state=state)
-        self.btn_load.configure(state=state)
+        try:
+            self.btn_run.configure(state=state, text="Generating..." if busy else "Generate")
+            self.btn_save_top.configure(state=state)
+            self.btn_load_top.configure(state=state)
+        except AttributeError:
+            pass  # UI being recreated
         self.configure(cursor="watch" if busy else "")
         if not busy:
             self.pbar.set(0.0)
@@ -802,6 +944,7 @@ class SplitApp(ctk.CTk):
             self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
             self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
 
+            self.var_loaded_ini.set(f"Loaded: {Path(f).name}")
             self.log(f"Konfigurasi dimuat: {f}")
         except Exception as e:
             messagebox.showerror("Error", f"Format .ini tidak valid: {e}")
