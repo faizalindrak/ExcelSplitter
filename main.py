@@ -375,15 +375,14 @@ def split_excel_with_template(
         # First try to read just the header to test file accessibility
         status_cb("Debug: Testing file accessibility...")
         try:
-            # Try to read just first few rows to test
             df_test = pd.read_excel(source_path, sheet_name=sheet_name, nrows=5, dtype=object)
             status_cb(f"Debug: Successfully read {len(df_test)} rows for testing")
         except Exception as test_e:
             status_cb(f"Debug: Test read failed: {str(test_e)}")
             raise test_e
 
-        # Now read the full file
-        df = pd.read_excel(source_path, sheet_name=sheet_name, dtype=object)
+        # Read with header at the correct row (header_rows is 1-indexed)
+        df = pd.read_excel(source_path, sheet_name=sheet_name, header=header_rows - 1, dtype=object)
 
         elapsed = time.time() - start_time
         status_cb(f"Debug: Successfully read {len(df)} rows in {elapsed:.2f} seconds")
@@ -431,15 +430,20 @@ def split_excel_with_template(
 
     # Selaraskan urutan kolom ke header template jika cocok
     templ_cols = None
+    templ_col_start = 1
     try:
         wb_probe = load_workbook(template_path, read_only=True, data_only=True)
         ws_probe = wb_probe.active
         tmp, c, empty_streak = [], 1, 0
+        first_col_found = False
         while c <= 500 and empty_streak < 5:
             val = ws_probe.cell(row=header_rows, column=c).value
             if val is None or str(val).strip() == "":
                 empty_streak += 1
             else:
+                if not first_col_found:
+                    templ_col_start = c
+                    first_col_found = True
                 tmp.append(str(val).strip()); empty_streak = 0
             c += 1
         wb_probe.close()
@@ -564,15 +568,12 @@ def split_excel_with_template(
         for r_off, row_vals in enumerate(values, start=0):
             row_idx = start_row + r_off
 
-            # Copy values
-            for c_idx, v in enumerate(row_vals, start=1):
+            for c_idx, v in enumerate(row_vals, start=templ_col_start):
                 ws.cell(row=row_idx, column=c_idx, value=v)
 
-            # Copy formatting from template row to current row
-            if r_off > 0:  # Don't copy formatting to the template row itself
+            if r_off > 0:
                 try:
-                    # Copy formatting from template row to current row
-                    for col_idx in range(1, len(row_vals) + 1):
+                    for col_idx in range(templ_col_start, templ_col_start + len(row_vals)):
                         template_cell = ws.cell(row=template_row, column=col_idx)
                         current_cell = ws.cell(row=row_idx, column=col_idx)
 
@@ -590,7 +591,8 @@ def split_excel_with_template(
                     pass
 
         last_data_row = start_row + len(values) - 1
-        set_print_titles_and_area(ws, header_rows, max(1, group.shape[1]), last_data_row)
+        last_col = templ_col_start + group.shape[1] - 1
+        set_print_titles_and_area(ws, header_rows, max(1, last_col), last_data_row)
 
         # Build filename with prefix and suffix
         key_part = safe_file_part(key_val)
@@ -995,7 +997,8 @@ class SplitApp(ctk.CTk):
             messagebox.showwarning("Perhatian", "Pastikan source & sheet sudah dipilih.")
             return
         try:
-            df = pd.read_excel(src, sheet_name=sheet, nrows=0)
+            header_row_idx = self.var_header_rows.get() - 1
+            df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
             headers = list(df.columns.astype(str))
             index_vals = [str(i+1) for i in range(len(headers))]
             values = headers + index_vals
