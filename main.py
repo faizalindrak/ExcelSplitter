@@ -1,22 +1,32 @@
 # split_gui.py
 # GUI untuk split Excel per nilai unik dengan template-based rendering.
 # Build exe: pyinstaller split_gui.spec
-# Dependencies: customtkinter, pandas, openpyxl, reportlab (opsional untuk PDF Engine "reportlab")
+# Dependencies: PySide6, PySide6-Fluent-Widgets, pandas, openpyxl
 
 import os
 import re
 import shutil
 import subprocess
-import threading
+import sys
 from pathlib import Path
 import configparser
-import tkinter as tk
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
 
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+
+from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QFileDialog
+)
+from qfluentwidgets import (
+    ScrollArea, SimpleCardWidget,
+    LineEdit, ComboBox, PushButton, PrimaryPushButton,
+    ProgressBar, SpinBox, TextEdit, InfoBar, InfoBarPosition,
+    ToolButton, SubtitleLabel, BodyLabel, CaptionLabel,
+    setTheme, Theme, FluentIcon as FIF
+)
 
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
@@ -625,604 +635,559 @@ def split_excel_with_template(
 
 # ----------------- GUI -----------------
 
-class SplitApp(ctk.CTk):
+class SplitWorker(QThread):
+    status = Signal(str)
+    progress = Signal(int, int)
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.params = params
+
+    def run(self):
+        try:
+            split_excel_with_template(
+                source_path=self.params['source_path'],
+                sheet_name=self.params['sheet_name'],
+                key_col=self.params['key_col'],
+                template_path=self.params['template_path'],
+                out_dir=self.params['out_dir'],
+                header_rows=self.params['header_rows'],
+                pdf_engine=self.params['pdf_engine'],
+                soffice_path=self.params['soffice_path'],
+                prefix=self.params['prefix'],
+                suffix=self.params['suffix'],
+                status_cb=self.status.emit,
+                progress_cb=lambda t, c: self.progress.emit(t, c)
+            )
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class AccordionCard(SimpleCardWidget):
+    def __init__(self, title, icon=None, parent=None):
+        super().__init__(parent)
+        self.setBorderRadius(8)
+        self._expanded = True
+
+        self._main_layout = QVBoxLayout(self)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(0)
+
+        self._header = QWidget()
+        self._header.setCursor(Qt.PointingHandCursor)
+        self._header.setFixedHeight(48)
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(16, 0, 16, 0)
+
+        if icon:
+            icon_widget = ToolButton(icon)
+            icon_widget.setFixedSize(20, 20)
+            icon_widget.setEnabled(False)
+            header_layout.addWidget(icon_widget)
+
+        self._title_label = SubtitleLabel(title)
+        header_layout.addWidget(self._title_label)
+        header_layout.addStretch()
+
+        self._toggle_btn = ToolButton(FIF.CHEVRON_DOWN)
+        self._toggle_btn.setFixedSize(20, 20)
+        self._toggle_btn.clicked.connect(self.toggle)
+        header_layout.addWidget(self._toggle_btn)
+
+        self._main_layout.addWidget(self._header)
+
+        self._content = QWidget()
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(16, 8, 16, 16)
+        self._content_layout.setSpacing(12)
+        self._main_layout.addWidget(self._content)
+
+        self._header.mousePressEvent = lambda e: self.toggle()
+
+    @property
+    def content_layout(self):
+        return self._content_layout
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        self._content.setVisible(self._expanded)
+        self._toggle_btn.setIcon(FIF.CHEVRON_DOWN if self._expanded else FIF.CHEVRON_RIGHT)
+
+    def collapse(self):
+        self._expanded = False
+        self._content.setVisible(False)
+        self._toggle_btn.setIcon(FIF.CHEVRON_RIGHT)
+
+    def expand(self):
+        self._expanded = True
+        self._content.setVisible(True)
+        self._toggle_btn.setIcon(FIF.CHEVRON_DOWN)
+class SplitApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.title("Excel Splitter (Template-based)")
-        self.geometry("980x700")
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
-
-        self.var_source = tk.StringVar()
-        self.var_sheet = tk.StringVar()
-        self.var_keycol = tk.StringVar()
-        self.var_template = tk.StringVar()
-        self.var_outdir = tk.StringVar()
-        self.var_header_rows = tk.IntVar(value=5)
-        self.var_pdf_engine = tk.StringVar(value="xlwings")
-        self.var_lo_path = tk.StringVar()
-        self.var_prefix = tk.StringVar(value="")
-        self.var_suffix = tk.StringVar(value="")
-        self.var_theme = tk.StringVar(value="blue")
-        self.var_loaded_ini = tk.StringVar(value="")
+        self.setWindowTitle("Excel Splitter")
+        self.resize(1000, 750)
+        setTheme(Theme.DARK)
 
         self.is_running = False
-        self.worker_thread = None
-
-        # Add validation traces
-        self.var_source.trace_add("write", self.validate_source)
-        self.var_template.trace_add("write", self.validate_template)
-        self.var_outdir.trace_add("write", self.validate_outdir)
-        self.var_lo_path.trace_add("write", self.validate_lo_path)
+        self.worker = None
 
         self._build_ui()
-
-    def change_theme(self, theme):
-        ctk.set_default_color_theme(theme)
-        # Destroy current UI and rebuild with new theme
-        for widget in self.winfo_children():
-            if widget != self:  # Don't destroy the root window
-                widget.destroy()
-        self._build_ui()
-        messagebox.showinfo("Theme Changed", f"Theme changed to {theme} successfully!")
-
-    def validate_source(self, *args):
-        path = self.var_source.get().strip()
-        if path and Path(path).exists() and Path(path).is_file():
-            # Valid file
-            if hasattr(self, 'entry_source'):
-                self.entry_source.configure(border_color="#00FF00")  # Green
-        else:
-            if hasattr(self, 'entry_source'):
-                self.entry_source.configure(border_color="#FF0000")  # Red
-
-    def validate_template(self, *args):
-        path = self.var_template.get().strip()
-        if path and Path(path).exists() and Path(path).is_file():
-            if hasattr(self, 'entry_template'):
-                self.entry_template.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_template'):
-                self.entry_template.configure(border_color="#FF0000")
-
-    def validate_outdir(self, *args):
-        path = self.var_outdir.get().strip()
-        if path and Path(path).exists() and Path(path).is_dir():
-            if hasattr(self, 'entry_outdir'):
-                self.entry_outdir.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_outdir'):
-                self.entry_outdir.configure(border_color="#FF0000")
-
-    def validate_lo_path(self, *args):
-        path = self.var_lo_path.get().strip()
-        if not path or (Path(path).exists() and Path(path).is_file()):
-            if hasattr(self, 'entry_lo_path'):
-                self.entry_lo_path.configure(border_color="#00FF00")
-        else:
-            if hasattr(self, 'entry_lo_path'):
-                self.entry_lo_path.configure(border_color="#FF0000")
 
     def _build_ui(self):
-        pad = {"padx": 12, "pady": 10}
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Main container
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(16, 12, 16, 4)
+        self.btn_save_ini = PushButton(FIF.SAVE, "Save .ini")
+        self.btn_save_ini.clicked.connect(self.save_ini)
+        self.btn_load_ini = PushButton(FIF.FOLDER, "Load .ini")
+        self.btn_load_ini.clicked.connect(self.load_ini)
+        self.lbl_loaded_ini = CaptionLabel("")
+        toolbar.addWidget(self.btn_save_ini)
+        toolbar.addWidget(self.btn_load_ini)
+        toolbar.addWidget(self.lbl_loaded_ini)
+        toolbar.addStretch()
+        root_layout.addLayout(toolbar)
 
-        # Top bar with left and right sections
-        top_frame = ctk.CTkFrame(main_frame)
-        top_frame.pack(fill="x", padx=10, pady=(10, 0))
+        scroll = ScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_widget = QWidget()
+        self.scroll_layout = QVBoxLayout(scroll_widget)
+        self.scroll_layout.setContentsMargins(16, 8, 16, 16)
+        self.scroll_layout.setSpacing(12)
+        scroll.setWidget(scroll_widget)
+        root_layout.addWidget(scroll)
 
-        # Left section: Save/Load buttons
-        left_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
-        left_frame.pack(side="left")
-        self.btn_save_top = ctk.CTkButton(left_frame, text="Save .ini", command=self.save_ini, width=80)
-        self.btn_save_top.pack(side="left", padx=(0, 8))
-        self.btn_load_top = ctk.CTkButton(left_frame, text="Load .ini", command=self.load_ini, width=80)
-        self.btn_load_top.pack(side="left", padx=(0, 8))
-        self.lbl_loaded_ini = ctk.CTkLabel(left_frame, textvariable=self.var_loaded_ini, fg_color="transparent")
-        self.lbl_loaded_ini.pack(side="left")
+        self._build_source_card()
+        self._build_template_card()
+        self._build_output_card()
+        self._build_actions_card()
 
-        # Right section: Theme selector
-        right_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
-        right_frame.pack(side="right")
-        ctk.CTkLabel(right_frame, text="Theme:").pack(side="left", padx=(0, 5))
-        theme_combo = ctk.CTkComboBox(right_frame, values=["blue", "green", "dark-blue"], variable=self.var_theme, width=120, command=self.change_theme)
-        theme_combo.pack(side="left")
+        self.scroll_layout.addStretch()
 
-        # Tabview
-        self.tabview = ctk.CTkTabview(main_frame, width=800, height=600)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+    def _build_source_card(self):
+        card = AccordionCard("Source", FIF.DOCUMENT)
+        layout = card.content_layout
 
-        # Create tabs
-        self.tabview.add("Input")
-        self.tabview.add("Template")
-        self.tabview.add("Output")
-        self.tabview.add("Actions")
+        row1 = QHBoxLayout()
+        self.edit_source = LineEdit()
+        self.edit_source.setPlaceholderText("Path to source Excel file...")
+        self.btn_browse_source = ToolButton(FIF.FOLDER)
+        self.btn_browse_source.clicked.connect(self.browse_source)
+        row1.addWidget(self.edit_source)
+        row1.addWidget(self.btn_browse_source)
+        layout.addLayout(row1)
 
-        # INPUT TAB
-        input_tab = self.tabview.tab("Input")
-        ctk.CTkLabel(input_tab, text="Source Excel").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_source = ctk.CTkEntry(input_tab, textvariable=self.var_source, width=520)
-        self.entry_source.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_source = ctk.CTkButton(input_tab, text="Browse...", command=self.browse_source)
-        self.btn_browse_source.grid(row=0, column=2, **pad)
+        row2 = QHBoxLayout()
+        self.cmb_sheet = ComboBox()
+        self.cmb_sheet.setPlaceholderText("Sheet")
+        self.cmb_sheet.setMinimumWidth(200)
+        self.btn_load_sheets = PushButton("Load Sheets")
+        self.btn_load_sheets.clicked.connect(self.load_sheets)
+        row2.addWidget(BodyLabel("Sheet:"))
+        row2.addWidget(self.cmb_sheet)
+        row2.addWidget(self.btn_load_sheets)
+        row2.addStretch()
+        layout.addLayout(row2)
 
-        ctk.CTkLabel(input_tab, text="Sheet Name").grid(row=1, column=0, sticky="e", **pad)
-        self.cmb_sheet = ctk.CTkComboBox(input_tab, values=[], variable=self.var_sheet, width=240)
-        self.cmb_sheet.grid(row=1, column=1, sticky="w", **pad)
-        self.btn_load_sheets = ctk.CTkButton(input_tab, text="Load Sheets", command=self.load_sheets)
-        self.btn_load_sheets.grid(row=1, column=2, **pad)
+        row3 = QHBoxLayout()
+        self.cmb_key = ComboBox()
+        self.cmb_key.setPlaceholderText("Key Column")
+        self.cmb_key.setMinimumWidth(200)
+        self.btn_load_headers = PushButton("Load Headers")
+        self.btn_load_headers.clicked.connect(self.load_headers)
+        row3.addWidget(BodyLabel("Key Column:"))
+        row3.addWidget(self.cmb_key)
+        row3.addWidget(self.btn_load_headers)
+        row3.addStretch()
+        layout.addLayout(row3)
 
-        ctk.CTkLabel(input_tab, text="Key Column (header or index)").grid(row=2, column=0, sticky="e", **pad)
-        self.cmb_key = ctk.CTkComboBox(input_tab, values=[], variable=self.var_keycol, width=240)
-        self.cmb_key.grid(row=2, column=1, sticky="w", **pad)
-        self.btn_load_headers = ctk.CTkButton(input_tab, text="Load Headers", command=self.load_headers)
-        self.btn_load_headers.grid(row=2, column=2, **pad)
+        self.scroll_layout.addWidget(card)
 
-        input_tab.grid_columnconfigure(1, weight=1)
+    def _build_template_card(self):
+        card = AccordionCard("Template", FIF.EDIT)
+        layout = card.content_layout
 
-        # TEMPLATE TAB
-        template_tab = self.tabview.tab("Template")
-        ctk.CTkLabel(template_tab, text="Template Excel").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_template = ctk.CTkEntry(template_tab, textvariable=self.var_template, width=520)
-        self.entry_template.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_template = ctk.CTkButton(template_tab, text="Browse...", command=self.browse_template)
-        self.btn_browse_template.grid(row=0, column=2, **pad)
+        row1 = QHBoxLayout()
+        self.edit_template = LineEdit()
+        self.edit_template.setPlaceholderText("Path to template Excel file...")
+        self.btn_browse_template = ToolButton(FIF.FOLDER)
+        self.btn_browse_template.clicked.connect(self.browse_template)
+        row1.addWidget(self.edit_template)
+        row1.addWidget(self.btn_browse_template)
+        layout.addLayout(row1)
 
-        ctk.CTkLabel(template_tab, text="HEADER_ROWS").grid(row=1, column=0, sticky="e", **pad)
-        header_entry = ctk.CTkEntry(template_tab, textvariable=self.var_header_rows, width=80)
-        header_entry.grid(row=1, column=1, sticky="w", **pad)
+        row2 = QHBoxLayout()
+        self.spin_header_rows = SpinBox()
+        self.spin_header_rows.setRange(1, 100)
+        self.spin_header_rows.setValue(5)
+        self.spin_header_rows.setFixedWidth(100)
+        row2.addWidget(BodyLabel("Header Rows:"))
+        row2.addWidget(self.spin_header_rows)
+        row2.addStretch()
+        layout.addLayout(row2)
 
-        template_tab.grid_columnconfigure(1, weight=1)
+        self.scroll_layout.addWidget(card)
 
-        # OUTPUT TAB
-        output_tab = self.tabview.tab("Output")
-        ctk.CTkLabel(output_tab, text="Output Folder").grid(row=0, column=0, sticky="e", **pad)
-        self.entry_outdir = ctk.CTkEntry(output_tab, textvariable=self.var_outdir, width=520)
-        self.entry_outdir.grid(row=0, column=1, sticky="we", **pad)
-        self.btn_browse_outdir = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_outdir)
-        self.btn_browse_outdir.grid(row=0, column=2, **pad)
+    def _build_output_card(self):
+        card = AccordionCard("Output", FIF.FOLDER)
+        layout = card.content_layout
 
-        ctk.CTkLabel(output_tab, text="PDF Engine").grid(row=1, column=0, sticky="e", **pad)
-        pdf_combo = ctk.CTkComboBox(output_tab, values=["xlwings", "libreoffice", "none"], variable=self.var_pdf_engine, width=200)
-        pdf_combo.grid(row=1, column=1, sticky="w", **pad)
+        row1 = QHBoxLayout()
+        self.edit_outdir = LineEdit()
+        self.edit_outdir.setPlaceholderText("Output folder...")
+        self.btn_browse_outdir = ToolButton(FIF.FOLDER)
+        self.btn_browse_outdir.clicked.connect(self.browse_outdir)
+        row1.addWidget(self.edit_outdir)
+        row1.addWidget(self.btn_browse_outdir)
+        layout.addLayout(row1)
 
-        ctk.CTkLabel(output_tab, text="LibreOffice (soffice.exe)").grid(row=2, column=0, sticky="e", **pad)
-        self.entry_lo_path = ctk.CTkEntry(output_tab, textvariable=self.var_lo_path, width=520)
-        self.entry_lo_path.grid(row=2, column=1, sticky="we", **pad)
-        self.btn_browse_soffice = ctk.CTkButton(output_tab, text="Browse...", command=self.browse_soffice)
-        self.btn_browse_soffice.grid(row=2, column=2, **pad)
+        row2 = QHBoxLayout()
+        self.cmb_pdf_engine = ComboBox()
+        self.cmb_pdf_engine.addItems(["xlwings", "libreoffice", "none"])
+        self.cmb_pdf_engine.setCurrentIndex(0)
+        self.cmb_pdf_engine.setFixedWidth(180)
+        row2.addWidget(BodyLabel("PDF Engine:"))
+        row2.addWidget(self.cmb_pdf_engine)
+        row2.addStretch()
+        layout.addLayout(row2)
 
-        ctk.CTkLabel(output_tab, text="Prefix").grid(row=3, column=0, sticky="e", **pad)
-        prefix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_prefix, width=240)
-        prefix_entry.grid(row=3, column=1, sticky="w", **pad)
+        row3 = QHBoxLayout()
+        self.edit_lo_path = LineEdit()
+        self.edit_lo_path.setPlaceholderText("Path to soffice.exe (optional)...")
+        self.btn_browse_soffice = ToolButton(FIF.FOLDER)
+        self.btn_browse_soffice.clicked.connect(self.browse_soffice)
+        row3.addWidget(BodyLabel("LibreOffice:"))
+        row3.addWidget(self.edit_lo_path)
+        row3.addWidget(self.btn_browse_soffice)
+        layout.addLayout(row3)
 
-        ctk.CTkLabel(output_tab, text="Suffix").grid(row=4, column=0, sticky="e", **pad)
-        suffix_entry = ctk.CTkEntry(output_tab, textvariable=self.var_suffix, width=240)
-        suffix_entry.grid(row=4, column=1, sticky="w", **pad)
+        row4 = QHBoxLayout()
+        self.edit_prefix = LineEdit()
+        self.edit_prefix.setPlaceholderText("Prefix...")
+        self.edit_prefix.setFixedWidth(200)
+        self.edit_suffix = LineEdit()
+        self.edit_suffix.setPlaceholderText("Suffix...")
+        self.edit_suffix.setFixedWidth(200)
+        row4.addWidget(BodyLabel("Prefix:"))
+        row4.addWidget(self.edit_prefix)
+        row4.addWidget(BodyLabel("Suffix:"))
+        row4.addWidget(self.edit_suffix)
+        row4.addStretch()
+        layout.addLayout(row4)
 
-        output_tab.grid_columnconfigure(1, weight=1)
+        self.scroll_layout.addWidget(card)
 
-        # ACTIONS TAB
-        actions_tab = self.tabview.tab("Actions")
+    def _build_actions_card(self):
+        card = AccordionCard("Actions", FIF.PLAY)
+        layout = card.content_layout
 
-        # Configuration Summary
-        summary_frame = ctk.CTkFrame(actions_tab)
-        summary_frame.pack(fill="x", padx=12, pady=(10, 10))
+        btn_row = QHBoxLayout()
+        self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")
+        self.btn_generate.setFixedHeight(40)
+        self.btn_generate.clicked.connect(self.on_run_clicked)
+        self.btn_open_output = PushButton(FIF.FOLDER, "Open Output Folder")
+        self.btn_open_output.setFixedHeight(40)
+        self.btn_open_output.clicked.connect(self.open_output_folder)
+        self.btn_open_output.setVisible(False)
+        self.btn_debug = PushButton("Debug Excel")
+        self.btn_debug.setFixedHeight(40)
+        self.btn_debug.clicked.connect(self.debug_excel)
+        btn_row.addWidget(self.btn_generate)
+        btn_row.addWidget(self.btn_open_output)
+        btn_row.addWidget(self.btn_debug)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
 
-        ctk.CTkLabel(summary_frame, text="Configuration Summary", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5))
+        self.progress_bar = ProgressBar()
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
-        # Create summary labels
-        self.summary_labels = {}
-        config_items = [
-            ("Source File", self.var_source),
-            ("Sheet Name", self.var_sheet),
-            ("Key Column", self.var_keycol),
-            ("Template File", self.var_template),
-            ("Header Rows", self.var_header_rows),
-            ("Output Folder", self.var_outdir),
-            ("PDF Engine", self.var_pdf_engine),
-            ("LibreOffice Path", self.var_lo_path),
-            ("Prefix", self.var_prefix),
-            ("Suffix", self.var_suffix),
-        ]
+        self.txt_log = TextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setMinimumHeight(200)
+        layout.addWidget(self.txt_log)
 
-        for label_text, var in config_items:
-            row_frame = ctk.CTkFrame(summary_frame, fg_color="transparent")
-            row_frame.pack(fill="x", padx=10, pady=0)
-            ctk.CTkLabel(row_frame, text=f"{label_text}:", width=120, anchor="w").pack(side="left")
-            value_label = ctk.CTkLabel(row_frame, textvariable=var, anchor="w")
-            value_label.pack(side="left", fill="x", expand=True)
-            self.summary_labels[label_text] = value_label
+        self.scroll_layout.addWidget(card)
+    def log(self, msg):
+        self.txt_log.append(msg)
 
-        # Buttons
-        btns = ctk.CTkFrame(actions_tab)
-        btns.pack(fill="x", padx=12, pady=(10, 4))
-        self.btn_run = ctk.CTkButton(btns, text="Generate", height=44, command=self.on_run_clicked)
-        self.btn_run.pack(side="left", padx=(0, 8))
-        self.btn_open_output = ctk.CTkButton(btns, text="Open Output Folder", height=44, command=self.open_output_folder)
-        self.btn_open_output.pack(side="left", padx=(0, 8))
-        self.btn_open_output.pack_forget()  # Hide initially
-        self.btn_debug = ctk.CTkButton(btns, text="Debug Excel", height=44, command=self.debug_excel, fg_color="gray")
-        self.btn_debug.pack(side="left", padx=(0, 8))
+    def set_progress(self, total, current):
+        if total <= 0:
+            self.progress_bar.setValue(0)
+        else:
+            self.progress_bar.setValue(int(100 * current / total))
 
-        # PROGRESS + LOG
-        self.pbar = ctk.CTkProgressBar(actions_tab, mode="determinate", width=640)
-        self.pbar.pack(fill="x", padx=12, pady=(14, 4))
-        self.pbar.set(0.0)
-        self.txt_status = ctk.CTkTextbox(actions_tab, height=300)
-        self.txt_status.pack(fill="both", expand=True, padx=12, pady=(10, 14))
+    def set_busy(self, busy):
+        self.is_running = busy
+        self.btn_generate.setEnabled(not busy)
+        self.btn_generate.setText("Generating..." if busy else "Generate")
+        self.btn_save_ini.setEnabled(not busy)
+        self.btn_load_ini.setEnabled(not busy)
+        if not busy:
+            self.progress_bar.setValue(0)
+
+    def browse_source(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Pilih source Excel",
+            "", "Excel files (*.xlsx *.xls *.xlsm *.xlsb)"
+        )
+        if f:
+            self.edit_source.setText(f)
+            self.log(f"Source: {f}")
+
+    def browse_template(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Pilih template Excel",
+            "", "Excel files (*.xlsx)"
+        )
+        if f:
+            self.edit_template.setText(f)
+            self.log(f"Template: {f}")
+
+    def browse_outdir(self):
+        d = QFileDialog.getExistingDirectory(self, "Pilih output folder")
+        if d:
+            self.edit_outdir.setText(d)
+            self.log(f"Output: {d}")
+
+    def browse_soffice(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Pilih soffice.exe (LibreOffice)",
+            "", "Executable (soffice.exe);;All files (*.*)"
+        )
+        if f:
+            self.edit_lo_path.setText(f)
+            self.log(f"LibreOffice: {f}")
+
+    def load_sheets(self):
+        src = self.edit_source.text().strip()
+        if not src:
+            InfoBar.warning("Perhatian", "Pilih source Excel dulu.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return
+        try:
+            xls = pd.ExcelFile(src)
+            sheets = xls.sheet_names
+            self.cmb_sheet.clear()
+            self.cmb_sheet.addItems(sheets)
+            if sheets:
+                self.cmb_sheet.setCurrentIndex(0)
+            self.log(f"Sheets loaded: {', '.join(sheets)}")
+        except Exception as e:
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def load_headers(self):
+        src = self.edit_source.text().strip()
+        sheet = self.cmb_sheet.currentText().strip()
+        if not src or not sheet:
+            InfoBar.warning("Perhatian", "Pastikan source & sheet sudah dipilih.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return
+        try:
+            header_row_idx = self.spin_header_rows.value() - 1
+            df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
+            headers = list(df.columns.astype(str))
+            index_vals = [str(i+1) for i in range(len(headers))]
+            values = headers + index_vals
+            self.cmb_key.clear()
+            self.cmb_key.addItems(values)
+            if headers:
+                self.cmb_key.setCurrentIndex(0)
+            self.log(f"Headers loaded: {headers}")
+        except Exception as e:
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
     def debug_excel(self):
-        """Debug Excel detection and show results"""
         try:
             self.log("=== Excel Detection Debug ===")
             results = debug_excel_detection()
             for result in results:
                 self.log(result)
-
-            # Also test the main check function
             excel_available = check_excel_availability()
             self.log(f"Final check_excel_availability(): {excel_available}")
             self.log("=== Debug selesai ===")
-
             if excel_available:
-                messagebox.showinfo("Debug Excel", "Excel terdeteksi dan dapat diakses!")
+                InfoBar.success("Debug Excel", "Excel terdeteksi dan dapat diakses!", parent=self, duration=3000, position=InfoBarPosition.TOP)
             else:
-                messagebox.showwarning("Debug Excel", "Excel tidak dapat diakses. Lihat log untuk detail.")
-
+                InfoBar.warning("Debug Excel", "Excel tidak dapat diakses. Lihat log.", parent=self, duration=5000, position=InfoBarPosition.TOP)
         except Exception as e:
             self.log(f"Error saat debug: {str(e)}")
-            messagebox.showerror("Debug Error", f"Gagal debug: {str(e)}")
+            InfoBar.error("Debug Error", f"Gagal debug: {str(e)}", parent=self, duration=5000, position=InfoBarPosition.TOP)
 
     def open_output_folder(self):
-        """Open the output folder in Windows Explorer"""
-        out_dir = self.var_outdir.get().strip()
+        out_dir = self.edit_outdir.text().strip()
         if out_dir and Path(out_dir).exists():
             try:
-                # Convert forward slashes to backslashes for Windows
                 win_path = str(Path(out_dir).resolve())
-
-                # Use Windows explorer with proper path handling
-                # Method 1: Try with shell=True (handles spaces better)
-                try:
-                    subprocess.run(f'explorer "{win_path}"', shell=True, check=True)
-                except subprocess.CalledProcessError:
-                    # Method 2: Alternative approach using start command
-                    subprocess.run(['cmd', '/c', 'start', '', win_path], check=True)
-
+                subprocess.run(f'explorer "{win_path}"', shell=True)
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to open output folder: {str(e)}")
+                InfoBar.error("Error", f"Failed to open folder: {str(e)}", parent=self, duration=5000, position=InfoBarPosition.TOP)
         else:
-            messagebox.showwarning("Warning", "Output folder not set or doesn't exist")
-
-    # ------------- UI Helpers -------------
-
-    def log(self, msg: str):
-        self.after(0, self._append_log, msg)
-
-    def _append_log(self, msg: str):
-        self.txt_status.insert("end", msg + "\n")
-        self.txt_status.see("end")
-
-    def set_progress(self, total: int, current: int):
-        self.after(0, self._set_progress_impl, total, current)
-
-    def _set_progress_impl(self, total: int, current: int):
-        ratio = 0.0 if total <= 0 else max(0.0, min(1.0, current / total))
-        self.pbar.set(ratio)
-
-    def set_busy(self, busy: bool):
-        self.after(0, self._set_busy_impl, busy)
-
-    def _set_busy_impl(self, busy: bool):
-        self.is_running = busy
-        state = "disabled" if busy else "normal"
-        try:
-            self.btn_run.configure(state=state, text="Generating..." if busy else "Generate")
-            self.btn_save_top.configure(state=state)
-            self.btn_load_top.configure(state=state)
-        except AttributeError:
-            pass  # UI being recreated
-        self.configure(cursor="watch" if busy else "")
-        if not busy:
-            self.pbar.set(0.0)
-
-    def show_open_output_button(self):
-        """Show the open output folder button after successful generation"""
-        self.after(0, self._show_open_output_button_impl)
-
-    def _show_open_output_button_impl(self):
-        try:
-            self.btn_open_output.pack(side="left", padx=(0, 8))
-        except AttributeError:
-            pass  # UI being recreated
-
-    # ------------- Browse & Load -------------
-
-    def browse_source(self):
-        f = filedialog.askopenfilename(
-            title="Pilih source Excel",
-            filetypes=[("Excel files", "*.xlsx;*.xls;*.xlsm;*.xlsb")]
-        )
-        if f:
-            self.var_source.set(f)
-            self.log(f"Source: {f}")
-
-    def browse_template(self):
-        f = filedialog.askopenfilename(
-            title="Pilih template Excel",
-            filetypes=[("Excel files", "*.xlsx")]
-        )
-        if f:
-            self.var_template.set(f)
-            self.log(f"Template: {f}")
-
-    def browse_outdir(self):
-        d = filedialog.askdirectory(title="Pilih output folder")
-        if d:
-            self.var_outdir.set(d)
-            self.log(f"Output: {d}")
-
-    def browse_soffice(self):
-        f = filedialog.askopenfilename(
-            title="Pilih soffice.exe (LibreOffice)",
-            filetypes=[("Executable", "soffice.exe"), ("All files", "*.*")]
-        )
-        if f:
-            self.var_lo_path.set(f)
-            self.log(f"LibreOffice: {f}")
-
-    def load_sheets(self):
-        src = self.var_source.get().strip()
-        if not src:
-            messagebox.showwarning("Perhatian", "Pilih source Excel dulu.")
-            return
-        try:
-            xls = pd.ExcelFile(src)
-            sheets = xls.sheet_names
-            self.cmb_sheet.configure(values=sheets)
-            if sheets:
-                self.var_sheet.set(sheets[0])
-            self.log(f"Sheets loaded: {', '.join(sheets)}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-    def load_headers(self):
-        src = self.var_source.get().strip()
-        sheet = self.var_sheet.get().strip()
-        if not src or not sheet:
-            messagebox.showwarning("Perhatian", "Pastikan source & sheet sudah dipilih.")
-            return
-        try:
-            header_row_idx = self.var_header_rows.get() - 1
-            df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
-            headers = list(df.columns.astype(str))
-            index_vals = [str(i+1) for i in range(len(headers))]
-            values = headers + index_vals
-            self.cmb_key.configure(values=values)
-            if headers:
-                self.var_keycol.set(headers[0])
-            self.log(f"Headers loaded: {headers}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-    # ------------- Run Generate (Threaded) -------------
-
+            InfoBar.warning("Warning", "Output folder not set or doesn't exist", parent=self, duration=3000, position=InfoBarPosition.TOP)
     def on_run_clicked(self):
         if self.is_running:
             return
         try:
-            source_path = Path(self.var_source.get().strip())
-            template_path = Path(self.var_template.get().strip())
-            out_dir = Path(self.var_outdir.get().strip())
-            sheet_name = self.var_sheet.get().strip()
-            key_raw = self.var_keycol.get().strip()
-            header_rows = int(self.var_header_rows.get())
-            pdf_engine = self.var_pdf_engine.get().strip().lower()
+            source_path = Path(self.edit_source.text().strip())
+            template_path = Path(self.edit_template.text().strip())
+            out_dir = Path(self.edit_outdir.text().strip())
+            sheet_name = self.cmb_sheet.currentText().strip()
+            key_raw = self.cmb_key.currentText().strip()
+            header_rows = self.spin_header_rows.value()
+            pdf_engine = self.cmb_pdf_engine.currentText().strip().lower()
 
             if not source_path.exists():
-                messagebox.showerror("Error", "Source Excel tidak ditemukan.")
+                InfoBar.error("Error", "Source Excel tidak ditemukan.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
             if not template_path.exists():
-                messagebox.showerror("Error", "Template Excel tidak ditemukan.")
+                InfoBar.error("Error", "Template Excel tidak ditemukan.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
-            if not out_dir:
-                messagebox.showerror("Error", "Output folder belum dipilih.")
+            if not self.edit_outdir.text().strip():
+                InfoBar.error("Error", "Output folder belum dipilih.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
             if not sheet_name:
-                messagebox.showerror("Error", "Sheet belum dipilih.")
+                InfoBar.error("Error", "Sheet belum dipilih.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
             if not key_raw:
-                messagebox.showerror("Error", "Key Column belum dipilih/diisi.")
+                InfoBar.error("Error", "Key Column belum dipilih/diisi.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
 
             try:
                 key_col = int(key_raw)
             except ValueError:
-                key_col = key_raw  # pakai header name
+                key_col = key_raw
 
-            # Validasi xlwings bila dipilih
             if pdf_engine == "xlwings":
                 if not XLWINGS_AVAILABLE:
-                    messagebox.showwarning(
-                        "xlwings tidak tersedia",
-                        "xlwings belum terpasang di environment ini.\n"
-                        "Jalankan: pip install xlwings\n"
-                        "Atau pilih PDF Engine: 'libreoffice' atau 'none'.\n\n"
-                        "Catatan: xlwings memerlukan Microsoft Excel yang terinstall."
-                    )
+                    InfoBar.warning("xlwings", "xlwings belum terpasang. Gunakan 'libreoffice' atau 'none'.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                     return
                 elif not check_excel_availability():
-                    # Check if it's a pywin32 issue
-                    try:
-                        import win32com.client
-                        pywin32_available = True
-                    except ImportError:
-                        pywin32_available = False
-
-                    if not pywin32_available:
-                        messagebox.showwarning(
-                            "pywin32 tidak tersedia",
-                            "Microsoft Excel terinstall, tetapi pywin32 tidak tersedia.\n\n"
-                            "Solusi:\n"
-                            "1. Install pywin32: pip install pywin32\n"
-                            "2. Atau gunakan conda: conda install pywin32\n"
-                            "3. Restart aplikasi setelah install\n\n"
-                            "Alternatif sementara:\n"
-                            "- Pilih PDF Engine: 'libreoffice'\n"
-                            "- Pilih PDF Engine: 'none' (hanya Excel files)"
-                        )
-                    else:
-                        messagebox.showwarning(
-                            "Microsoft Excel tidak dapat diakses",
-                            "Microsoft Excel terinstall tetapi tidak dapat diakses via COM.\n\n"
-                            "Solusi:\n"
-                            "1. Tutup semua Excel yang terbuka\n"
-                            "2. Restart aplikasi ini\n"
-                            "3. Coba lagi\n\n"
-                            "Alternatif:\n"
-                            "- Pilih PDF Engine: 'libreoffice'\n"
-                            "- Pilih PDF Engine: 'none' (hanya Excel files)"
-                        )
+                    InfoBar.warning("Excel", "Microsoft Excel tidak dapat diakses via COM.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                     return
 
-            # Deteksi LibreOffice jika dipilih
             soffice_path = None
             if pdf_engine == "libreoffice":
-                lo_explicit = self.var_lo_path.get().strip()
+                lo_explicit = self.edit_lo_path.text().strip()
                 soffice_path = find_soffice(lo_explicit)
                 if not soffice_path:
-                    ans = messagebox.askyesno(
-                        "LibreOffice tidak ditemukan",
-                        "Tidak menemukan 'soffice'. Mau pilih lokasi secara manual?"
-                    )
-                    if ans:
-                        self.browse_soffice()
-                        lo_explicit = self.var_lo_path.get().strip()
-                        soffice_path = find_soffice(lo_explicit)
-                if not soffice_path:
-                    messagebox.showerror(
-                        "Error",
-                        "LibreOffice (soffice.exe) tidak ditemukan.\n"
-                        "Isi path LibreOffice atau pilih PDF Engine: 'xlwings' atau 'none'."
-                    )
+                    InfoBar.error("Error", "LibreOffice (soffice.exe) tidak ditemukan.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                     return
 
             self.set_busy(True)
             self.log("Mulai generate...")
 
-            # Auto cleanup before generation if using xlwings
             if pdf_engine == "xlwings":
-                self.log("Membersihkan Excel COM sessions sebelum generate...")
+                self.log("Membersihkan Excel COM sessions...")
                 cleanup_excel_com()
 
-            def worker():
-                try:
-                    split_excel_with_template(
-                        source_path=source_path,
-                        sheet_name=sheet_name,
-                        key_col=key_col,
-                        template_path=template_path,
-                        out_dir=out_dir,
-                        header_rows=header_rows,
-                        pdf_engine=pdf_engine,
-                        soffice_path=soffice_path,
-                        prefix=self.var_prefix.get().strip(),
-                        suffix=self.var_suffix.get().strip(),
-                        status_cb=self.log,
-                        progress_cb=self.set_progress
-                    )
-                    self.log("Selesai.")
-                    self.show_open_output_button()
-                    # Final cleanup after successful generation
-                    if pdf_engine == "xlwings":
-                        cleanup_excel_com()
-                    self.after(0, lambda: messagebox.showinfo("Selesai", "Proses selesai."))
-                except subprocess.CalledProcessError as e:
-                    try:
-                        out = e.stdout.decode("utf-8", errors="ignore")
-                        err = e.stderr.decode("utf-8", errors="ignore")
-                    except Exception:
-                        out, err = str(e), ""
-                    self.log(out); self.log(err)
-                    self.after(0, lambda: messagebox.showerror("LibreOffice Error", "Gagal export PDF. Lihat log."))
-                except Exception as e:
-                    error_msg = str(e)
-                    self.after(0, lambda: messagebox.showerror("Error", error_msg))
-                finally:
-                    self.set_busy(False)
+            params = {
+                'source_path': source_path,
+                'sheet_name': sheet_name,
+                'key_col': key_col,
+                'template_path': template_path,
+                'out_dir': out_dir,
+                'header_rows': header_rows,
+                'pdf_engine': pdf_engine,
+                'soffice_path': soffice_path,
+                'prefix': self.edit_prefix.text().strip(),
+                'suffix': self.edit_suffix.text().strip(),
+            }
 
-            self.worker_thread = threading.Thread(target=worker, daemon=True)
-            self.worker_thread.start()
+            self.worker = SplitWorker(params)
+            self.worker.status.connect(self.log)
+            self.worker.progress.connect(self.set_progress)
+            self.worker.finished.connect(self._on_worker_finished)
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
 
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
             self.set_busy(False)
 
-    # ------------- INI Save / Load -------------
+    def _on_worker_finished(self):
+        self.set_busy(False)
+        self.log("Selesai.")
+        self.btn_open_output.setVisible(True)
+        pdf_engine = self.cmb_pdf_engine.currentText().strip().lower()
+        if pdf_engine == "xlwings":
+            cleanup_excel_com()
+        InfoBar.success("Selesai", "Proses selesai.", parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def _on_worker_error(self, error_msg):
+        self.set_busy(False)
+        self.log(f"Error: {error_msg}")
+        InfoBar.error("Error", error_msg, parent=self, duration=8000, position=InfoBarPosition.TOP)
 
     def save_ini(self):
-        f = filedialog.asksaveasfilename(
-            defaultextension=".ini",
-            filetypes=[("INI files", "*.ini")],
-            title="Simpan konfigurasi"
+        f, _ = QFileDialog.getSaveFileName(
+            self, "Simpan konfigurasi", "", "INI files (*.ini)"
         )
         if not f:
             return
         cfg = configparser.ConfigParser()
         cfg["template"] = {
-            "template_path": self.var_template.get().strip(),
-            "header_rows": str(self.var_header_rows.get()),
+            "template_path": self.edit_template.text().strip(),
+            "header_rows": str(self.spin_header_rows.value()),
         }
         cfg["source"] = {
-            "source_path": self.var_source.get().strip(),
-            "sheet_name": self.var_sheet.get().strip(),
-            "key_col": self.var_keycol.get().strip()
+            "source_path": self.edit_source.text().strip(),
+            "sheet_name": self.cmb_sheet.currentText().strip(),
+            "key_col": self.cmb_key.currentText().strip()
         }
         cfg["output"] = {
-            "output_dir": self.var_outdir.get().strip(),
-            "pdf_engine": self.var_pdf_engine.get().strip().lower(),
-            "libreoffice_path": self.var_lo_path.get().strip(),
-            "prefix": self.var_prefix.get().strip(),
-            "suffix": self.var_suffix.get().strip()
+            "output_dir": self.edit_outdir.text().strip(),
+            "pdf_engine": self.cmb_pdf_engine.currentText().strip().lower(),
+            "libreoffice_path": self.edit_lo_path.text().strip(),
+            "prefix": self.edit_prefix.text().strip(),
+            "suffix": self.edit_suffix.text().strip()
         }
         with open(f, "w", encoding="utf-8") as fp:
             cfg.write(fp)
         self.log(f"Konfigurasi tersimpan: {f}")
 
     def load_ini(self):
-        f = filedialog.askopenfilename(
-            title="Muat konfigurasi",
-            filetypes=[("INI files", "*.ini")]
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Muat konfigurasi", "", "INI files (*.ini)"
         )
         if not f:
             return
         cfg = configparser.ConfigParser()
         cfg.read(f, encoding="utf-8")
-
         try:
-            self.var_template.set(cfg.get("template", "template_path", fallback=""))
-            self.var_header_rows.set(cfg.getint("template", "header_rows", fallback=5))
-
-            self.var_source.set(cfg.get("source", "source_path", fallback=""))
-            self.var_sheet.set(cfg.get("source", "sheet_name", fallback=""))
-            self.var_keycol.set(cfg.get("source", "key_col", fallback=""))
-
-            self.var_outdir.set(cfg.get("output", "output_dir", fallback=""))
-            self.var_pdf_engine.set(cfg.get("output", "pdf_engine", fallback="xlwings").lower())
-            self.var_lo_path.set(cfg.get("output", "libreoffice_path", fallback=""))
-            self.var_prefix.set(cfg.get("output", "prefix", fallback=""))
-            self.var_suffix.set(cfg.get("output", "suffix", fallback=""))
-
-            self.var_loaded_ini.set(f"Loaded: {Path(f).name}")
+            self.edit_template.setText(cfg.get("template", "template_path", fallback=""))
+            self.spin_header_rows.setValue(cfg.getint("template", "header_rows", fallback=5))
+            self.edit_source.setText(cfg.get("source", "source_path", fallback=""))
+            sheet = cfg.get("source", "sheet_name", fallback="")
+            if sheet:
+                self.cmb_sheet.clear()
+                self.cmb_sheet.addItem(sheet)
+                self.cmb_sheet.setCurrentIndex(0)
+            key = cfg.get("source", "key_col", fallback="")
+            if key:
+                self.cmb_key.clear()
+                self.cmb_key.addItem(key)
+                self.cmb_key.setCurrentIndex(0)
+            self.edit_outdir.setText(cfg.get("output", "output_dir", fallback=""))
+            pdf_eng = cfg.get("output", "pdf_engine", fallback="xlwings").lower()
+            idx = self.cmb_pdf_engine.findText(pdf_eng)
+            if idx >= 0:
+                self.cmb_pdf_engine.setCurrentIndex(idx)
+            self.edit_lo_path.setText(cfg.get("output", "libreoffice_path", fallback=""))
+            self.edit_prefix.setText(cfg.get("output", "prefix", fallback=""))
+            self.edit_suffix.setText(cfg.get("output", "suffix", fallback=""))
+            self.lbl_loaded_ini.setText(f"Loaded: {Path(f).name}")
             self.log(f"Konfigurasi dimuat: {f}")
         except Exception as e:
-            messagebox.showerror("Error", f"Format .ini tidak valid: {e}")
+            InfoBar.error("Error", f"Format .ini tidak valid: {e}", parent=self, duration=5000, position=InfoBarPosition.TOP)
 
 
 if __name__ == "__main__":
-    app = SplitApp()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    window = SplitApp()
+    window.show()
+    sys.exit(app.exec())
