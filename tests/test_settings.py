@@ -74,6 +74,29 @@ class SettingsTests(unittest.TestCase):
             self.assertFalse(hasattr(window, "btn_load_ini"))
             self.assertTrue(hasattr(window, "btn_reset_settings"))
 
+    def test_mail_merge_settings_persist_with_qsettings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.ini"
+            first = main.SplitApp(settings=self.make_settings(settings_path))
+            self.addCleanup(first.deleteLater)
+
+            first.edit_recipient_path.setText("recipients.xlsx")
+            first.cmb_recipient_sheet.addItem("Recipients")
+            first.cmb_recipient_sheet.setCurrentIndex(0)
+            first.spin_recipient_header_row.setValue(2)
+            first.edit_mail_subject.setText("Subject {key}")
+            first.edit_mail_html_template.setText("body.html")
+            first.save_settings()
+
+            second = main.SplitApp(settings=QSettings(str(settings_path), QSettings.IniFormat))
+            self.addCleanup(second.deleteLater)
+
+            self.assertEqual(second.edit_recipient_path.text(), "recipients.xlsx")
+            self.assertEqual(second.cmb_recipient_sheet.currentText(), "Recipients")
+            self.assertEqual(second.spin_recipient_header_row.value(), 2)
+            self.assertEqual(second.edit_mail_subject.text(), "Subject {key}")
+            self.assertEqual(second.edit_mail_html_template.text(), "body.html")
+
 
 if __name__ == "__main__":
     unittest.main()

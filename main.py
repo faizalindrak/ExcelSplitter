@@ -28,7 +28,16 @@ from qfluentwidgets import (
     isDarkTheme, qconfig, setTheme, Theme, FluentIcon as FIF
 )
 
-from mail_merge import SplitResult
+from mail_merge import (
+    all_jobs_valid,
+    AttachmentSelection,
+    EmailJob,
+    EmailTemplate,
+    SplitResult,
+    build_email_jobs,
+    load_recipient_rows,
+    read_recipient_headers,
+)
 
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
 TEMPLATE_MODE_SOURCE_TEMPLATE = "source_template"
@@ -1244,6 +1253,59 @@ class SplitApp(QWidget):
         self.mail_merge_card, layout = self._panel("Mail Merge", FIF.MAIL)
         self.lbl_mail_merge_summary = CaptionLabel("No split results loaded.")
         layout.addWidget(self.lbl_mail_merge_summary)
+
+        recipient_grid = QGridLayout()
+        recipient_grid.setHorizontalSpacing(10)
+        recipient_grid.setVerticalSpacing(8)
+        self.edit_recipient_path = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_recipient_path.setPlaceholderText("Recipient mapping Excel file")
+        self.btn_browse_recipients = self._field_action_button(ToolButton(FIF.FOLDER))
+        self.btn_browse_recipients.clicked.connect(self.browse_recipient_mapping)
+        self.cmb_recipient_sheet = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
+        self.cmb_recipient_sheet.setPlaceholderText("Sheet")
+        self.btn_load_recipient_sheets = self._field_action_button(ToolButton(FIF.SYNC))
+        self.btn_load_recipient_sheets.setToolTip("Load Recipient Sheets")
+        self.btn_load_recipient_sheets.clicked.connect(self.load_recipient_sheets)
+        self.spin_recipient_header_row = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_recipient_header_row.setRange(1, 100)
+        self.spin_recipient_header_row.setValue(1)
+        self.btn_load_recipient_headers = self._field_action_button(ToolButton(FIF.SYNC))
+        self.btn_load_recipient_headers.setToolTip("Load Recipient Headers")
+        self.btn_load_recipient_headers.clicked.connect(self.load_recipient_headers)
+        self.cmb_recipient_key = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
+        self.cmb_recipient_to = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
+        self.cmb_recipient_cc = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
+        self.cmb_recipient_bcc = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
+        recipient_grid.addWidget(self._labeled("Recipient Workbook", self.edit_recipient_path), 0, 0)
+        recipient_grid.addWidget(self.btn_browse_recipients, 0, 1, Qt.AlignBottom)
+        recipient_grid.addWidget(self._labeled("Sheet", self.cmb_recipient_sheet), 0, 2)
+        recipient_grid.addWidget(self.btn_load_recipient_sheets, 0, 3, Qt.AlignBottom)
+        recipient_grid.addWidget(self._labeled("Header Row", self.spin_recipient_header_row), 0, 4)
+        recipient_grid.addWidget(self.btn_load_recipient_headers, 0, 5, Qt.AlignBottom)
+        recipient_grid.addWidget(self._labeled("Key", self.cmb_recipient_key), 1, 0)
+        recipient_grid.addWidget(self._labeled("To", self.cmb_recipient_to), 1, 1)
+        recipient_grid.addWidget(self._labeled("CC", self.cmb_recipient_cc), 1, 2)
+        recipient_grid.addWidget(self._labeled("BCC", self.cmb_recipient_bcc), 1, 3)
+        recipient_grid.setColumnStretch(6, 1)
+        layout.addLayout(recipient_grid)
+
+        content_grid = QGridLayout()
+        content_grid.setHorizontalSpacing(10)
+        content_grid.setVerticalSpacing(8)
+        self.edit_mail_subject = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_mail_subject.setPlaceholderText("Subject, e.g. Report {key}")
+        self.edit_mail_body = TextEdit()
+        self.edit_mail_body.setMinimumHeight(90)
+        self.edit_mail_html_template = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_mail_html_template.setPlaceholderText("Optional HTML template")
+        self.btn_browse_mail_html = self._field_action_button(ToolButton(FIF.FOLDER))
+        self.btn_browse_mail_html.clicked.connect(self.browse_mail_html_template)
+        content_grid.addWidget(self._labeled("Subject", self.edit_mail_subject), 0, 0)
+        content_grid.addWidget(self._labeled("Body", self.edit_mail_body), 1, 0)
+        content_grid.addWidget(self._labeled("HTML Template", self.edit_mail_html_template), 2, 0)
+        content_grid.addWidget(self.btn_browse_mail_html, 2, 1, Qt.AlignBottom)
+        layout.addLayout(content_grid)
+
         self.mail_merge_card.setVisible(False)
         self.main_panel_layout.addWidget(self.mail_merge_card)
 
@@ -1331,6 +1393,19 @@ class SplitApp(QWidget):
         self.cmb_key.currentTextChanged.connect(self.update_filename_preview)
         self.cmb_sheet.currentTextChanged.connect(lambda *_: self.load_headers(silent=True))
 
+        for edit in [self.edit_recipient_path, self.edit_mail_subject, self.edit_mail_html_template]:
+            edit.editingFinished.connect(self.save_settings)
+        self.edit_mail_body.textChanged.connect(self.save_settings)
+        for combo in [
+            self.cmb_recipient_sheet,
+            self.cmb_recipient_key,
+            self.cmb_recipient_to,
+            self.cmb_recipient_cc,
+            self.cmb_recipient_bcc,
+        ]:
+            combo.currentTextChanged.connect(self.save_settings)
+        self.spin_recipient_header_row.valueChanged.connect(self.save_settings)
+
         self.spin_source_header_rows.valueChanged.connect(self.save_settings)
         self.spin_source_header_rows.valueChanged.connect(lambda *_: self.refresh_template_mapping(auto=True))
         self.spin_template_header_rows.valueChanged.connect(self.save_settings)
@@ -1358,6 +1433,16 @@ class SplitApp(QWidget):
         self.settings.setValue("prefix", self.edit_prefix.text().strip())
         self.settings.setValue("suffix", self.edit_suffix.text().strip())
         self.settings.setValue("column_mapping", json.dumps(mapping))
+        self.settings.setValue("mail_recipient_path", self.edit_recipient_path.text().strip())
+        self.settings.setValue("mail_recipient_sheet", self.cmb_recipient_sheet.currentText().strip())
+        self.settings.setValue("mail_recipient_header_row", self.spin_recipient_header_row.value())
+        self.settings.setValue("mail_recipient_key_col", self.cmb_recipient_key.currentText().strip())
+        self.settings.setValue("mail_recipient_to_col", self.cmb_recipient_to.currentText().strip())
+        self.settings.setValue("mail_recipient_cc_col", self.cmb_recipient_cc.currentText().strip())
+        self.settings.setValue("mail_recipient_bcc_col", self.cmb_recipient_bcc.currentText().strip())
+        self.settings.setValue("mail_subject", self.edit_mail_subject.text().strip())
+        self.settings.setValue("mail_body", self.edit_mail_body.toPlainText())
+        self.settings.setValue("mail_html_template", self.edit_mail_html_template.text().strip())
         self.settings.sync()
         self.update_workflow_status()
 
@@ -1377,6 +1462,11 @@ class SplitApp(QWidget):
             self.edit_lo_path.setText(self.settings.value("libreoffice_path", ""))
             self.edit_prefix.setText(self.settings.value("prefix", ""))
             self.edit_suffix.setText(self.settings.value("suffix", ""))
+            self.edit_recipient_path.setText(self.settings.value("mail_recipient_path", ""))
+            self.spin_recipient_header_row.setValue(int(self.settings.value("mail_recipient_header_row", 1)))
+            self.edit_mail_subject.setText(self.settings.value("mail_subject", ""))
+            self.edit_mail_body.setPlainText(self.settings.value("mail_body", ""))
+            self.edit_mail_html_template.setText(self.settings.value("mail_html_template", ""))
 
             sheet = self.settings.value("sheet_name", "")
             if sheet:
@@ -1389,6 +1479,24 @@ class SplitApp(QWidget):
                 self.cmb_key.clear()
                 self.cmb_key.addItem(key)
                 self.cmb_key.setCurrentIndex(0)
+
+            mail_sheet = self.settings.value("mail_recipient_sheet", "")
+            if mail_sheet:
+                self.cmb_recipient_sheet.clear()
+                self.cmb_recipient_sheet.addItem(mail_sheet)
+                self.cmb_recipient_sheet.setCurrentIndex(0)
+
+            for setting_key, combo in [
+                ("mail_recipient_key_col", self.cmb_recipient_key),
+                ("mail_recipient_to_col", self.cmb_recipient_to),
+                ("mail_recipient_cc_col", self.cmb_recipient_cc),
+                ("mail_recipient_bcc_col", self.cmb_recipient_bcc),
+            ]:
+                value = self.settings.value(setting_key, "")
+                if value:
+                    combo.clear()
+                    combo.addItem(value)
+                    combo.setCurrentIndex(0)
 
             mode = self.settings.value("template_mode", TEMPLATE_MODE_TEMPLATE_FILE)
             mode_label = TEMPLATE_MODE_LABELS.get(mode, TEMPLATE_MODE_LABELS[TEMPLATE_MODE_TEMPLATE_FILE])
@@ -1441,13 +1549,23 @@ class SplitApp(QWidget):
             self.edit_lo_path.clear()
             self.edit_prefix.clear()
             self.edit_suffix.clear()
+            self.edit_recipient_path.clear()
+            self.edit_mail_subject.clear()
+            self.edit_mail_body.clear()
+            self.edit_mail_html_template.clear()
             self.cmb_sheet.clear()
             self.cmb_key.clear()
+            self.cmb_recipient_sheet.clear()
+            self.cmb_recipient_key.clear()
+            self.cmb_recipient_to.clear()
+            self.cmb_recipient_cc.clear()
+            self.cmb_recipient_bcc.clear()
             self.cmb_template_mode.setCurrentIndex(0)
             self.cmb_output_type.setCurrentIndex(0)
             self.cmb_pdf_engine.setCurrentIndex(0)
             self.spin_source_header_rows.setValue(5)
             self.spin_template_header_rows.setValue(5)
+            self.spin_recipient_header_row.setValue(1)
             self.source_headers = []
             self.template_headers = []
             self.saved_column_mapping = {}
@@ -1670,6 +1788,62 @@ class SplitApp(QWidget):
         if f:
             self.edit_lo_path.setText(f)
             self.log(f"LibreOffice: {f}")
+
+    def browse_recipient_mapping(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Pilih recipient mapping Excel",
+            "", "Excel files (*.xlsx *.xls *.xlsm)"
+        )
+        if f:
+            self.edit_recipient_path.setText(f)
+            self.load_recipient_sheets()
+
+    def load_recipient_sheets(self):
+        path = self.edit_recipient_path.text().strip()
+        if not path:
+            InfoBar.warning("Perhatian", "Pilih recipient mapping Excel dulu.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return
+        try:
+            with pd.ExcelFile(path) as xls:
+                sheets = list(xls.sheet_names)
+            self.cmb_recipient_sheet.clear()
+            self.cmb_recipient_sheet.addItems(sheets)
+            if sheets:
+                self.cmb_recipient_sheet.setCurrentIndex(0)
+                self.load_recipient_headers()
+            self.save_settings()
+        except Exception as e:
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def load_recipient_headers(self):
+        path = self.edit_recipient_path.text().strip()
+        sheet = self.cmb_recipient_sheet.currentText().strip()
+        if not path or not sheet:
+            return
+        try:
+            headers = read_recipient_headers(Path(path), sheet, self.spin_recipient_header_row.value())
+            choices = [""] + headers
+            for combo in [self.cmb_recipient_key, self.cmb_recipient_to, self.cmb_recipient_cc, self.cmb_recipient_bcc]:
+                combo.clear()
+                combo.addItems(choices)
+            self._select_combo_text(self.cmb_recipient_key, "Key")
+            self._select_combo_text(self.cmb_recipient_to, "To")
+            self._select_combo_text(self.cmb_recipient_cc, "CC")
+            self._select_combo_text(self.cmb_recipient_bcc, "BCC")
+            self.save_settings()
+        except Exception as e:
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def _select_combo_text(self, combo, text):
+        idx = combo.findText(text)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def browse_mail_html_template(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Pilih HTML template", "", "HTML files (*.html *.htm)")
+        if f:
+            self.edit_mail_html_template.setText(f)
+            self.save_settings()
 
     def refresh_source_options(self, silent=False):
         self.load_sheets(load_headers=True, silent=silent)

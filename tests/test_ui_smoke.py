@@ -257,6 +257,19 @@ class UISmokeTests(unittest.TestCase):
             self.assertFalse(window.mail_merge_card.isHidden())
             self.assertIn("1 split file", window.lbl_mail_merge_summary.text())
 
+    def test_mail_merge_recipient_controls_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "edit_recipient_path"))
+            self.assertTrue(hasattr(window, "cmb_recipient_sheet"))
+            self.assertTrue(hasattr(window, "spin_recipient_header_row"))
+            self.assertTrue(hasattr(window, "cmb_recipient_key"))
+            self.assertTrue(hasattr(window, "cmb_recipient_to"))
+            self.assertTrue(hasattr(window, "cmb_recipient_cc"))
+            self.assertTrue(hasattr(window, "cmb_recipient_bcc"))
+
 
 if __name__ == "__main__":
     unittest.main()
