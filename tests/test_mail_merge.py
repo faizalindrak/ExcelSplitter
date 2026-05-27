@@ -42,6 +42,50 @@ class MailMergeCoreTests(unittest.TestCase):
             "Hello alice@example.com, key=A, dept=Finance, keep={missing}",
         )
 
+    def test_read_recipient_headers_from_excel_sheet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recipients.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Recipients"
+            ws.append(["Report", None, None, None])
+            ws.append(["Key", "To", "CC", "Department"])
+            wb.save(path)
+
+            headers = mail_merge.read_recipient_headers(path, "Recipients", 2)
+
+            self.assertEqual(headers, ["Key", "To", "CC", "Department"])
+
+    def test_load_recipient_rows_uses_manual_column_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recipients.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Recipients"
+            ws.append(["Customer", "Email", "Copy", "Team"])
+            ws.append(["A", "a@example.com; aa@example.com", "lead@example.com", "Finance"])
+            ws.append(["B", "b@example.com", None, "Ops"])
+            wb.save(path)
+
+            rows = mail_merge.load_recipient_rows(
+                path,
+                "Recipients",
+                1,
+                {
+                    "key": "Customer",
+                    "to": "Email",
+                    "cc": "Copy",
+                    "bcc": "",
+                },
+            )
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0].key, "A")
+            self.assertEqual(rows[0].to, ["a@example.com", "aa@example.com"])
+            self.assertEqual(rows[0].cc, ["lead@example.com"])
+            self.assertEqual(rows[0].raw["Team"], "Finance")
+            self.assertEqual(rows[1].bcc, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,3 +99,51 @@ def render_placeholders(template: str, context: dict[str, object]) -> str:
         return lookup.get(name.lower(), match.group(0))
 
     return re.sub(r"\{([^{}]+)\}", replace, template)
+
+
+def _clean_cell(value) -> str:
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def read_recipient_headers(path: Path, sheet_name: str, header_row: int) -> list[str]:
+    df = pd.read_excel(path, sheet_name=sheet_name, header=header_row - 1, nrows=0, dtype=object)
+    return [str(column).strip() for column in df.columns]
+
+
+def load_recipient_rows(
+    path: Path,
+    sheet_name: str,
+    header_row: int,
+    column_mapping: dict[str, str],
+) -> list[RecipientRow]:
+    required = ["key", "to"]
+    missing = [name for name in required if not column_mapping.get(name)]
+    if missing:
+        raise ValueError("Recipient mapping missing required columns: " + ", ".join(missing))
+
+    df = pd.read_excel(path, sheet_name=sheet_name, header=header_row - 1, dtype=object)
+    rows: list[RecipientRow] = []
+    key_col = column_mapping["key"]
+    to_col = column_mapping["to"]
+    cc_col = column_mapping.get("cc") or ""
+    bcc_col = column_mapping.get("bcc") or ""
+
+    for _, record in df.fillna("").iterrows():
+        raw = {str(column): _clean_cell(record[column]) for column in df.columns}
+        key = _clean_cell(record[key_col])
+        if not key:
+            continue
+        rows.append(
+            RecipientRow(
+                key=key,
+                to=parse_email_list(record[to_col]),
+                cc=parse_email_list(record[cc_col]) if cc_col else [],
+                bcc=parse_email_list(record[bcc_col]) if bcc_col else [],
+                raw=raw,
+            )
+        )
+    return rows
