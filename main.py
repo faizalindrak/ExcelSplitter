@@ -25,6 +25,7 @@ from qfluentwidgets import (
     LineEdit, ComboBox, PushButton, PrimaryPushButton,
     ProgressBar, SpinBox, TextEdit, InfoBar, InfoBarPosition,
     ToolButton, SubtitleLabel, BodyLabel, CaptionLabel,
+    CheckBox,
     isDarkTheme, qconfig, setTheme, Theme, FluentIcon as FIF
 )
 
@@ -1306,6 +1307,64 @@ class SplitApp(QWidget):
         content_grid.addWidget(self.btn_browse_mail_html, 2, 1, Qt.AlignBottom)
         layout.addLayout(content_grid)
 
+        options_grid = QGridLayout()
+        options_grid.setHorizontalSpacing(10)
+        options_grid.setVerticalSpacing(8)
+        self.chk_attach_excel = CheckBox("Attach Excel")
+        self.chk_attach_excel.setChecked(True)
+        self.chk_attach_pdf = CheckBox("Attach PDF")
+        self.chk_delay_delivery = CheckBox("Delay delivery")
+        self.chk_delay_delivery.setChecked(True)
+        self.spin_delay_minutes = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_delay_minutes.setRange(0, 1440)
+        self.spin_delay_minutes.setValue(5)
+        self.chk_throttle = CheckBox("Throttle")
+        self.chk_throttle.setChecked(True)
+        self.spin_throttle_seconds = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_throttle_seconds.setRange(0, 3600)
+        self.spin_throttle_seconds.setValue(5)
+        self.btn_build_mail_preview = PushButton("Build Preview")
+        self.btn_build_mail_preview.clicked.connect(self.build_mail_preview)
+        options_grid.addWidget(self.chk_attach_excel, 0, 0)
+        options_grid.addWidget(self.chk_attach_pdf, 0, 1)
+        options_grid.addWidget(self.chk_delay_delivery, 0, 2)
+        options_grid.addWidget(self._labeled("Minutes", self.spin_delay_minutes), 0, 3)
+        options_grid.addWidget(self.chk_throttle, 0, 4)
+        options_grid.addWidget(self._labeled("Seconds", self.spin_throttle_seconds), 0, 5)
+        options_grid.addWidget(self.btn_build_mail_preview, 0, 6)
+        layout.addLayout(options_grid)
+
+        self.lbl_mail_validation_summary = CaptionLabel("Build preview to validate emails.")
+        self.lbl_mail_preview_count = BodyLabel("0 / 0")
+        self.lbl_mail_preview_key = BodyLabel("")
+        self.lbl_mail_preview_recipients = BodyLabel("")
+        self.lbl_mail_preview_subject = BodyLabel("")
+        self.txt_mail_preview_body = TextEdit()
+        self.txt_mail_preview_body.setReadOnly(True)
+        self.txt_mail_preview_body.setMinimumHeight(100)
+        self.lbl_mail_preview_attachments = CaptionLabel("")
+        self.lbl_mail_preview_errors = CaptionLabel("")
+        nav = QHBoxLayout()
+        self.btn_prev_mail_preview = PushButton("Previous")
+        self.btn_next_mail_preview = PushButton("Next")
+        self.btn_prev_mail_preview.clicked.connect(self.prev_mail_preview)
+        self.btn_next_mail_preview.clicked.connect(self.next_mail_preview)
+        nav.addWidget(self.btn_prev_mail_preview)
+        nav.addWidget(self.lbl_mail_preview_count)
+        nav.addWidget(self.btn_next_mail_preview)
+        nav.addStretch()
+        layout.addWidget(self.lbl_mail_validation_summary)
+        layout.addLayout(nav)
+        layout.addWidget(self.lbl_mail_preview_key)
+        layout.addWidget(self.lbl_mail_preview_recipients)
+        layout.addWidget(self.lbl_mail_preview_subject)
+        layout.addWidget(self.txt_mail_preview_body)
+        layout.addWidget(self.lbl_mail_preview_attachments)
+        layout.addWidget(self.lbl_mail_preview_errors)
+        self.btn_send_mail_merge = PrimaryPushButton(FIF.SEND, "Send")
+        self.btn_send_mail_merge.setEnabled(False)
+        layout.addWidget(self.btn_send_mail_merge)
+
         self.mail_merge_card.setVisible(False)
         self.main_panel_layout.addWidget(self.mail_merge_card)
 
@@ -1319,6 +1378,84 @@ class SplitApp(QWidget):
         self.lbl_mail_merge_summary.setText(f"{count} split {suffix} loaded for mail merge.")
         self.mail_merge_card.setVisible(True)
         self.update_mail_merge_entry_state()
+
+    def current_attachment_selection(self):
+        return AttachmentSelection(
+            attach_excel=self.chk_attach_excel.isChecked(),
+            attach_pdf=self.chk_attach_pdf.isChecked(),
+        )
+
+    def current_email_template(self):
+        html_path = self.edit_mail_html_template.text().strip()
+        body = self.edit_mail_body.toPlainText()
+        is_html = False
+        if html_path and Path(html_path).exists():
+            body = Path(html_path).read_text(encoding="utf-8")
+            is_html = True
+        return EmailTemplate(
+            subject=self.edit_mail_subject.text().strip(),
+            body=body,
+            is_html=is_html,
+            template_path=Path(html_path) if html_path else None,
+        )
+
+    def build_mail_preview(self):
+        rows = load_recipient_rows(
+            Path(self.edit_recipient_path.text().strip()),
+            self.cmb_recipient_sheet.currentText().strip(),
+            self.spin_recipient_header_row.value(),
+            {
+                "key": self.cmb_recipient_key.currentText().strip(),
+                "to": self.cmb_recipient_to.currentText().strip(),
+                "cc": self.cmb_recipient_cc.currentText().strip(),
+                "bcc": self.cmb_recipient_bcc.currentText().strip(),
+            },
+        )
+        self.current_mail_jobs, self.current_mail_warnings = build_email_jobs(
+            split_results=self.current_split_results,
+            recipients=rows,
+            template=self.current_email_template(),
+            attachments=self.current_attachment_selection(),
+        )
+        self.current_preview_index = 0
+        self.render_mail_preview()
+
+    def render_mail_preview(self):
+        total = len(self.current_mail_jobs)
+        if total == 0:
+            self.lbl_mail_preview_count.setText("0 / 0")
+            self.btn_send_mail_merge.setEnabled(False)
+            return
+        self.current_preview_index = max(0, min(self.current_preview_index, total - 1))
+        job = self.current_mail_jobs[self.current_preview_index]
+        issue_count = sum(len(item.validation_errors) for item in self.current_mail_jobs)
+        ready_count = sum(1 for item in self.current_mail_jobs if item.is_valid)
+        issue_label = "issue" if issue_count == 1 else "issues"
+        self.lbl_mail_validation_summary.setText(
+            f"{ready_count} emails ready, {issue_count} {issue_label} found"
+        )
+        self.lbl_mail_preview_count.setText(f"{self.current_preview_index + 1} / {total}")
+        self.lbl_mail_preview_key.setText(f"Key: {job.key}")
+        self.lbl_mail_preview_recipients.setText(
+            f"To: {'; '.join(job.to)} | CC: {'; '.join(job.cc)} | BCC: {'; '.join(job.bcc)}"
+        )
+        self.lbl_mail_preview_subject.setText(f"Subject: {job.subject}")
+        self.txt_mail_preview_body.setPlainText(job.body)
+        self.lbl_mail_preview_attachments.setText(
+            "Attachments: " + "; ".join(str(path) for path in job.attachments)
+        )
+        self.lbl_mail_preview_errors.setText("Errors: " + "; ".join(job.validation_errors))
+        self.btn_send_mail_merge.setEnabled(all_jobs_valid(self.current_mail_jobs))
+
+    def next_mail_preview(self):
+        if self.current_preview_index < len(self.current_mail_jobs) - 1:
+            self.current_preview_index += 1
+        self.render_mail_preview()
+
+    def prev_mail_preview(self):
+        if self.current_preview_index > 0:
+            self.current_preview_index -= 1
+        self.render_mail_preview()
 
     def _build_actions_card(self, layout):
         self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")

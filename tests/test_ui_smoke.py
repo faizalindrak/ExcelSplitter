@@ -270,6 +270,38 @@ class UISmokeTests(unittest.TestCase):
             self.assertTrue(hasattr(window, "cmb_recipient_cc"))
             self.assertTrue(hasattr(window, "cmb_recipient_bcc"))
 
+    def test_mail_merge_preview_carousel_moves_between_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.current_mail_jobs = [
+                main.EmailJob("A", ["a@example.com"], [], [], "Subject A", "Body A", False, []),
+                main.EmailJob("B", ["b@example.com"], [], [], "Subject B", "Body B", False, []),
+            ]
+            window.current_preview_index = 0
+
+            window.render_mail_preview()
+            self.assertIn("1 / 2", window.lbl_mail_preview_count.text())
+            self.assertIn("Subject A", window.lbl_mail_preview_subject.text())
+
+            window.next_mail_preview()
+
+            self.assertIn("2 / 2", window.lbl_mail_preview_count.text())
+            self.assertIn("Subject B", window.lbl_mail_preview_subject.text())
+
+    def test_mail_merge_send_disabled_when_validation_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.current_mail_jobs = [
+                main.EmailJob("A", [], [], [], "", "", False, [], validation_errors=["Required To is empty for key A"])
+            ]
+
+            window.render_mail_preview()
+
+            self.assertFalse(window.btn_send_mail_merge.isEnabled())
+            self.assertIn("1 issue", window.lbl_mail_validation_summary.text())
+
 
 if __name__ == "__main__":
     unittest.main()
