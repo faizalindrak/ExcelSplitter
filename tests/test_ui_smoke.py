@@ -302,6 +302,22 @@ class UISmokeTests(unittest.TestCase):
             self.assertFalse(window.btn_send_mail_merge.isEnabled())
             self.assertIn("1 issue", window.lbl_mail_validation_summary.text())
 
+    def test_current_send_timing_reads_delay_and_throttle_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.chk_delay_delivery.setChecked(True)
+            window.spin_delay_minutes.setValue(7)
+            window.chk_throttle.setChecked(True)
+            window.spin_throttle_seconds.setValue(3)
+
+            timing = window.current_send_timing()
+
+            self.assertTrue(timing.delay_delivery_enabled)
+            self.assertEqual(timing.delay_delivery_minutes, 7)
+            self.assertTrue(timing.throttle_enabled)
+            self.assertEqual(timing.throttle_seconds, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

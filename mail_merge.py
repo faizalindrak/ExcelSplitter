@@ -288,3 +288,25 @@ class OutlookMailProvider:
             message.DeferredDeliveryTime = self.now_fn() + timedelta(minutes=timing.delay_delivery_minutes)
         message.Send()
         return SendResult(key=job.key, to=job.to, status="sent", message="outlook")
+
+
+def send_jobs(
+    jobs: list[EmailJob],
+    provider: MailProvider,
+    timing: SendTimingOptions,
+    status_cb: Callable[[str], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> list[SendResult]:
+    status_cb = status_cb or (lambda message: None)
+    stop_requested = stop_requested or (lambda: False)
+    results: list[SendResult] = []
+    for index, job in enumerate(jobs):
+        if stop_requested():
+            results.append(SendResult(key=job.key, to=job.to, status="cancelled", message="cancelled before send"))
+            break
+        status_cb(f"Sending {index + 1}/{len(jobs)}: {job.key}")
+        results.append(provider.send(job, timing))
+        if timing.throttle_enabled and timing.throttle_seconds > 0 and index < len(jobs) - 1:
+            sleep_fn(timing.throttle_seconds)
+    return results

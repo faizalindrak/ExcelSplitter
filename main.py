@@ -34,10 +34,13 @@ from mail_merge import (
     AttachmentSelection,
     EmailJob,
     EmailTemplate,
+    OutlookMailProvider,
+    SendTimingOptions,
     SplitResult,
     build_email_jobs,
     load_recipient_rows,
     read_recipient_headers,
+    send_jobs,
 )
 
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
@@ -892,6 +895,35 @@ class SplitWorker(QThread):
             self.error.emit(str(e))
 
 
+class MailMergeWorker(QThread):
+    status = Signal(str)
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, jobs, timing, provider=None):
+        super().__init__()
+        self.jobs = jobs
+        self.timing = timing
+        self.provider = provider or OutlookMailProvider()
+        self._cancel_requested = False
+
+    def cancel(self):
+        self._cancel_requested = True
+
+    def run(self):
+        try:
+            results = send_jobs(
+                self.jobs,
+                self.provider,
+                self.timing,
+                status_cb=self.status.emit,
+                stop_requested=lambda: self._cancel_requested,
+            )
+            self.finished.emit(results)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class SplitApp(QWidget):
     def __init__(self, settings=None):
         super().__init__()
@@ -917,6 +949,7 @@ class SplitApp(QWidget):
         self.current_mail_jobs = []
         self.current_mail_warnings = []
         self.current_preview_index = 0
+        self.mail_worker = None
 
         self._build_ui()
         self.load_settings()
@@ -1363,7 +1396,11 @@ class SplitApp(QWidget):
         layout.addWidget(self.lbl_mail_preview_errors)
         self.btn_send_mail_merge = PrimaryPushButton(FIF.SEND, "Send")
         self.btn_send_mail_merge.setEnabled(False)
+        self.btn_send_mail_merge.clicked.connect(self.on_send_mail_merge_clicked)
         layout.addWidget(self.btn_send_mail_merge)
+        self.btn_cancel_mail_merge = PushButton("Cancel Send")
+        self.btn_cancel_mail_merge.clicked.connect(self.cancel_mail_merge_send)
+        layout.addWidget(self.btn_cancel_mail_merge)
 
         self.mail_merge_card.setVisible(False)
         self.main_panel_layout.addWidget(self.mail_merge_card)
@@ -1456,6 +1493,41 @@ class SplitApp(QWidget):
         if self.current_preview_index > 0:
             self.current_preview_index -= 1
         self.render_mail_preview()
+
+    def current_send_timing(self):
+        return SendTimingOptions(
+            delay_delivery_enabled=self.chk_delay_delivery.isChecked(),
+            delay_delivery_minutes=self.spin_delay_minutes.value(),
+            throttle_enabled=self.chk_throttle.isChecked(),
+            throttle_seconds=self.spin_throttle_seconds.value(),
+        )
+
+    def on_send_mail_merge_clicked(self):
+        self.render_mail_preview()
+        if not all_jobs_valid(self.current_mail_jobs):
+            InfoBar.error("Mail Merge", "Fix validation issues before sending.", parent=self, duration=5000, position=InfoBarPosition.TOP)
+            return
+        self.btn_send_mail_merge.setEnabled(False)
+        self.mail_worker = MailMergeWorker(self.current_mail_jobs, self.current_send_timing())
+        self.mail_worker.status.connect(self.log)
+        self.mail_worker.finished.connect(self.on_mail_merge_finished)
+        self.mail_worker.error.connect(self.on_mail_merge_error)
+        self.mail_worker.start()
+
+    def cancel_mail_merge_send(self):
+        if self.mail_worker is not None:
+            self.mail_worker.cancel()
+
+    def on_mail_merge_finished(self, results):
+        for result in results:
+            self.log(f"Mail {result.status}: {result.key} {'; '.join(result.to)} {result.message}")
+        self.btn_send_mail_merge.setEnabled(all_jobs_valid(self.current_mail_jobs))
+        InfoBar.success("Mail Merge", "Send process finished.", parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def on_mail_merge_error(self, error_msg):
+        self.log(f"Mail Merge error: {error_msg}")
+        self.btn_send_mail_merge.setEnabled(all_jobs_valid(self.current_mail_jobs))
+        InfoBar.error("Mail Merge", error_msg, parent=self, duration=8000, position=InfoBarPosition.TOP)
 
     def _build_actions_card(self, layout):
         self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")

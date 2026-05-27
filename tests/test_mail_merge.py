@@ -238,6 +238,32 @@ class MailMergeCoreTests(unittest.TestCase):
         self.assertIn(("attach", str(attachment)), calls)
         self.assertIn(("send", "Subject A", now + mail_merge.timedelta(minutes=5)), calls)
 
+    def test_send_jobs_throttles_between_jobs_and_can_cancel(self):
+        provider = mail_merge.FakeMailProvider()
+        sleeps = []
+        statuses = []
+        jobs = [
+            mail_merge.EmailJob("A", ["a@example.com"], [], [], "A", "Body", False, []),
+            mail_merge.EmailJob("B", ["b@example.com"], [], [], "B", "Body", False, []),
+        ]
+
+        results = mail_merge.send_jobs(
+            jobs,
+            provider,
+            mail_merge.SendTimingOptions(
+                delay_delivery_enabled=False,
+                delay_delivery_minutes=0,
+                throttle_enabled=True,
+                throttle_seconds=5,
+            ),
+            status_cb=statuses.append,
+            sleep_fn=sleeps.append,
+        )
+
+        self.assertEqual([result.key for result in results], ["A", "B"])
+        self.assertEqual(sleeps, [5])
+        self.assertEqual(statuses, ["Sending 1/2: A", "Sending 2/2: B"])
+
 
 if __name__ == "__main__":
     unittest.main()
