@@ -318,6 +318,21 @@ class UISmokeTests(unittest.TestCase):
             self.assertTrue(timing.throttle_enabled)
             self.assertEqual(timing.throttle_seconds, 3)
 
+    def test_mail_merge_attachment_options_follow_split_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            window.current_split_results = [
+                main.SplitResult(key="A", excel_path=None, pdf_path=Path(tmp) / "A.pdf", output_file_type=main.OUTPUT_TYPE_PDF)
+            ]
+            window.show_mail_merge_panel()
+
+            self.assertFalse(window.chk_attach_excel.isEnabled())
+            self.assertFalse(window.chk_attach_excel.isChecked())
+            self.assertTrue(window.chk_attach_pdf.isEnabled())
+            self.assertTrue(window.chk_attach_pdf.isChecked())
+
 
 if __name__ == "__main__":
     unittest.main()

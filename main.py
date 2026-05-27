@@ -1413,8 +1413,23 @@ class SplitApp(QWidget):
         count = len(self.current_split_results)
         suffix = "file" if count == 1 else "files"
         self.lbl_mail_merge_summary.setText(f"{count} split {suffix} loaded for mail merge.")
+        self.update_mail_attachment_options()
         self.mail_merge_card.setVisible(True)
         self.update_mail_merge_entry_state()
+
+    def update_mail_attachment_options(self):
+        has_excel = any(result.excel_path for result in self.current_split_results)
+        has_pdf = any(result.pdf_path for result in self.current_split_results)
+        self.chk_attach_excel.setEnabled(has_excel)
+        self.chk_attach_pdf.setEnabled(has_pdf)
+        if not has_excel:
+            self.chk_attach_excel.setChecked(False)
+        elif not has_pdf:
+            self.chk_attach_excel.setChecked(True)
+        if not has_pdf:
+            self.chk_attach_pdf.setChecked(False)
+        elif not has_excel:
+            self.chk_attach_pdf.setChecked(True)
 
     def current_attachment_selection(self):
         return AttachmentSelection(
@@ -1614,6 +1629,15 @@ class SplitApp(QWidget):
         ]:
             combo.currentTextChanged.connect(self.save_settings)
         self.spin_recipient_header_row.valueChanged.connect(self.save_settings)
+        for checkbox in [
+            self.chk_attach_excel,
+            self.chk_attach_pdf,
+            self.chk_delay_delivery,
+            self.chk_throttle,
+        ]:
+            checkbox.stateChanged.connect(lambda *_: self.save_settings())
+        self.spin_delay_minutes.valueChanged.connect(self.save_settings)
+        self.spin_throttle_seconds.valueChanged.connect(self.save_settings)
 
         self.spin_source_header_rows.valueChanged.connect(self.save_settings)
         self.spin_source_header_rows.valueChanged.connect(lambda *_: self.refresh_template_mapping(auto=True))
@@ -1652,8 +1676,20 @@ class SplitApp(QWidget):
         self.settings.setValue("mail_subject", self.edit_mail_subject.text().strip())
         self.settings.setValue("mail_body", self.edit_mail_body.toPlainText())
         self.settings.setValue("mail_html_template", self.edit_mail_html_template.text().strip())
+        self.settings.setValue("mail_attach_excel", self.chk_attach_excel.isChecked())
+        self.settings.setValue("mail_attach_pdf", self.chk_attach_pdf.isChecked())
+        self.settings.setValue("mail_delay_delivery", self.chk_delay_delivery.isChecked())
+        self.settings.setValue("mail_delay_minutes", self.spin_delay_minutes.value())
+        self.settings.setValue("mail_throttle", self.chk_throttle.isChecked())
+        self.settings.setValue("mail_throttle_seconds", self.spin_throttle_seconds.value())
         self.settings.sync()
         self.update_workflow_status()
+
+    def _settings_bool(self, key, default):
+        value = self.settings.value(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     def load_settings(self):
         self._loading_settings = True
@@ -1676,6 +1712,12 @@ class SplitApp(QWidget):
             self.edit_mail_subject.setText(self.settings.value("mail_subject", ""))
             self.edit_mail_body.setPlainText(self.settings.value("mail_body", ""))
             self.edit_mail_html_template.setText(self.settings.value("mail_html_template", ""))
+            self.chk_attach_excel.setChecked(self._settings_bool("mail_attach_excel", True))
+            self.chk_attach_pdf.setChecked(self._settings_bool("mail_attach_pdf", False))
+            self.chk_delay_delivery.setChecked(self._settings_bool("mail_delay_delivery", True))
+            self.spin_delay_minutes.setValue(int(self.settings.value("mail_delay_minutes", 5)))
+            self.chk_throttle.setChecked(self._settings_bool("mail_throttle", True))
+            self.spin_throttle_seconds.setValue(int(self.settings.value("mail_throttle_seconds", 5)))
 
             sheet = self.settings.value("sheet_name", "")
             if sheet:
@@ -1762,6 +1804,10 @@ class SplitApp(QWidget):
             self.edit_mail_subject.clear()
             self.edit_mail_body.clear()
             self.edit_mail_html_template.clear()
+            self.chk_attach_excel.setChecked(True)
+            self.chk_attach_pdf.setChecked(False)
+            self.chk_delay_delivery.setChecked(True)
+            self.chk_throttle.setChecked(True)
             self.cmb_sheet.clear()
             self.cmb_key.clear()
             self.cmb_recipient_sheet.clear()
@@ -1775,6 +1821,8 @@ class SplitApp(QWidget):
             self.spin_source_header_rows.setValue(5)
             self.spin_template_header_rows.setValue(5)
             self.spin_recipient_header_row.setValue(1)
+            self.spin_delay_minutes.setValue(5)
+            self.spin_throttle_seconds.setValue(5)
             self.source_headers = []
             self.template_headers = []
             self.saved_column_mapping = {}

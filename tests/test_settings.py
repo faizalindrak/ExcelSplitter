@@ -86,6 +86,12 @@ class SettingsTests(unittest.TestCase):
             first.spin_recipient_header_row.setValue(2)
             first.edit_mail_subject.setText("Subject {key}")
             first.edit_mail_html_template.setText("body.html")
+            first.chk_attach_excel.setChecked(False)
+            first.chk_attach_pdf.setChecked(True)
+            first.chk_delay_delivery.setChecked(True)
+            first.spin_delay_minutes.setValue(9)
+            first.chk_throttle.setChecked(False)
+            first.spin_throttle_seconds.setValue(4)
             first.save_settings()
 
             second = main.SplitApp(settings=QSettings(str(settings_path), QSettings.IniFormat))
@@ -96,6 +102,12 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(second.spin_recipient_header_row.value(), 2)
             self.assertEqual(second.edit_mail_subject.text(), "Subject {key}")
             self.assertEqual(second.edit_mail_html_template.text(), "body.html")
+            self.assertFalse(second.chk_attach_excel.isChecked())
+            self.assertTrue(second.chk_attach_pdf.isChecked())
+            self.assertTrue(second.chk_delay_delivery.isChecked())
+            self.assertEqual(second.spin_delay_minutes.value(), 9)
+            self.assertFalse(second.chk_throttle.isChecked())
+            self.assertEqual(second.spin_throttle_seconds.value(), 4)
 
 
 if __name__ == "__main__":
