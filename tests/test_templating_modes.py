@@ -306,6 +306,45 @@ class SourceTemplateSplitTests(unittest.TestCase):
             self.assertTrue((out_dir / "A.xlsx").exists())
             self.assertTrue((out_dir / "A.pdf").exists())
 
+    def test_split_returns_manifest_for_excel_and_pdf_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            original_export = main.export_pdf_via_lo
+
+            def fake_export(xlsx_path, soffice_path=None):
+                xlsx_path.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n")
+
+            try:
+                main.export_pdf_via_lo = fake_export
+                results = main.split_excel_with_template(
+                    source,
+                    "Data",
+                    "Dept",
+                    source,
+                    out_dir,
+                    1,
+                    pdf_engine="libreoffice",
+                    template_mode="source_template",
+                    output_file_type=main.OUTPUT_TYPE_EXCEL_AND_PDF,
+                )
+            finally:
+                main.export_pdf_via_lo = original_export
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "A")
+            self.assertEqual(results[0].excel_path, out_dir / "A.xlsx")
+            self.assertEqual(results[0].pdf_path, out_dir / "A.pdf")
+            self.assertEqual(results[0].output_file_type, main.OUTPUT_TYPE_EXCEL_AND_PDF)
+
 
 if __name__ == "__main__":
     unittest.main()

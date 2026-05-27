@@ -28,6 +28,8 @@ from qfluentwidgets import (
     isDarkTheme, qconfig, setTheme, Theme, FluentIcon as FIF
 )
 
+from mail_merge import SplitResult
+
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
 TEMPLATE_MODE_SOURCE_TEMPLATE = "source_template"
 TEMPLATE_MODE_LABELS = {
@@ -534,6 +536,7 @@ def split_excel_with_template(
     if template_mode == TEMPLATE_MODE_TEMPLATE_FILE and not template_path.exists():
         raise FileNotFoundError(f"Template tidak ditemukan: {template_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
+    split_results: list[SplitResult] = []
 
     status_cb("Membaca sumber...")
 
@@ -708,6 +711,15 @@ def split_excel_with_template(
                 elif eng == "xlwings":
                     export_pdf_via_xlwings(xlsx_out)
                 remove_intermediate_workbook_for_pdf(xlsx_out, output_file_type)
+            pdf_out = xlsx_out.with_suffix(".pdf")
+            split_results.append(
+                SplitResult(
+                    key=str(key_val),
+                    excel_path=xlsx_out if xlsx_out.exists() else None,
+                    pdf_path=pdf_out if pdf_out.exists() else None,
+                    output_file_type=output_file_type,
+                )
+            )
             continue
 
         # 1) Tulis XLSX dari template
@@ -811,6 +823,15 @@ def split_excel_with_template(
             elif eng == "xlwings":
                 export_pdf_via_xlwings(xlsx_out)
             remove_intermediate_workbook_for_pdf(xlsx_out, output_file_type)
+        pdf_out = xlsx_out.with_suffix(".pdf")
+        split_results.append(
+            SplitResult(
+                key=str(key_val),
+                excel_path=xlsx_out if xlsx_out.exists() else None,
+                pdf_path=pdf_out if pdf_out.exists() else None,
+                output_file_type=output_file_type,
+            )
+        )
 
     status_cb("Selesai.")
     progress_cb(total, total)
@@ -818,6 +839,8 @@ def split_excel_with_template(
     # Final cleanup for Excel COM sessions
     if (effective_pdf_engine or "none").lower() == "xlwings":
         cleanup_excel_com()
+
+    return split_results
 
 
 # ----------------- GUI -----------------
@@ -831,10 +854,11 @@ class SplitWorker(QThread):
     def __init__(self, params):
         super().__init__()
         self.params = params
+        self.results = []
 
     def run(self):
         try:
-            split_excel_with_template(
+            self.results = split_excel_with_template(
                 source_path=self.params['source_path'],
                 sheet_name=self.params['sheet_name'],
                 key_col=self.params['key_col'],
