@@ -232,6 +232,80 @@ class SourceTemplateSplitTests(unittest.TestCase):
             self.assertEqual([ws_out["A2"].value, ws_out["B2"].value], ["A", "Alice"])
             self.assertEqual([ws_out["A3"].value, ws_out["B3"].value], ["A", "Ana"])
 
+    def test_pdf_output_type_removes_intermediate_workbook_after_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            original_export = main.export_pdf_via_lo
+
+            def fake_export(xlsx_path, soffice_path=None):
+                xlsx_path.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n")
+
+            try:
+                main.export_pdf_via_lo = fake_export
+                main.split_excel_with_template(
+                    source,
+                    "Data",
+                    "Dept",
+                    source,
+                    out_dir,
+                    1,
+                    pdf_engine="libreoffice",
+                    template_mode="source_template",
+                    output_file_type=main.OUTPUT_TYPE_PDF,
+                )
+            finally:
+                main.export_pdf_via_lo = original_export
+
+            self.assertTrue((out_dir / "A.pdf").exists())
+            self.assertFalse((out_dir / "A.xlsx").exists())
+
+    def test_excel_and_pdf_output_type_keeps_workbook_and_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            original_export = main.export_pdf_via_lo
+
+            def fake_export(xlsx_path, soffice_path=None):
+                xlsx_path.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n")
+
+            try:
+                main.export_pdf_via_lo = fake_export
+                main.split_excel_with_template(
+                    source,
+                    "Data",
+                    "Dept",
+                    source,
+                    out_dir,
+                    1,
+                    pdf_engine="libreoffice",
+                    template_mode="source_template",
+                    output_file_type=main.OUTPUT_TYPE_EXCEL_AND_PDF,
+                )
+            finally:
+                main.export_pdf_via_lo = original_export
+
+            self.assertTrue((out_dir / "A.xlsx").exists())
+            self.assertTrue((out_dir / "A.pdf").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

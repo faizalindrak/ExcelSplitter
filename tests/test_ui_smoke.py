@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from openpyxl import Workbook
+
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 if os.name == "nt" and os.path.isdir(r"C:\Windows\Fonts"):
@@ -155,7 +157,7 @@ class UISmokeTests(unittest.TestCase):
                 window.cmb_output_type.itemText(index)
                 for index in range(window.cmb_output_type.count())
             ]
-            self.assertEqual(output_types, ["Excel", "PDF"])
+            self.assertEqual(output_types, ["Excel", "PDF", "Excel + PDF"])
             self.assertEqual(window.cmb_output_type.currentText(), "Excel")
             self.assertTrue(window.cmb_pdf_engine.isHidden())
 
@@ -170,6 +172,53 @@ class UISmokeTests(unittest.TestCase):
             window.on_output_type_changed()
             self.assertFalse(window.cmb_pdf_engine.isHidden())
             self.assertIn("PRE <Dept value> SUF.pdf", window.lbl_filename_preview.text())
+
+            window.cmb_output_type.setCurrentIndex(window.cmb_output_type.findText("Excel + PDF"))
+            window.on_output_type_changed()
+            self.assertFalse(window.cmb_pdf_engine.isHidden())
+            self.assertIn("PRE <Dept value> SUF.xlsx + PDF", window.lbl_filename_preview.text())
+
+    def test_source_refresh_controls_are_icon_buttons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertIsInstance(window.btn_load_sheets, main.ToolButton)
+            self.assertIsInstance(window.btn_load_headers, main.ToolButton)
+            self.assertEqual(window.btn_load_sheets.toolTip(), "Load Sheets")
+            self.assertEqual(window.btn_load_headers.toolTip(), "Load Headers")
+
+    def test_refresh_source_options_populates_sheets_and_key_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.edit_source.setText(str(source))
+
+            window.refresh_source_options()
+
+            self.assertEqual(window.cmb_sheet.currentText(), "Data")
+            self.assertEqual(window.spin_source_header_rows.value(), 1)
+            key_values = [
+                window.cmb_key.itemText(index)
+                for index in range(window.cmb_key.count())
+            ]
+            self.assertEqual(key_values, ["Dept", "Name", "1", "2"])
+
+    def test_template_header_row_sits_in_template_workbook_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            row_layout = window.template_file_row_widget.layout()
+            self.assertGreaterEqual(row_layout.indexOf(window.template_header_row_widget), 0)
 
     def test_footer_progress_is_hidden_until_generation_starts(self):
         with tempfile.TemporaryDirectory() as tmp:
