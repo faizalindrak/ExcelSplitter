@@ -40,6 +40,10 @@ SECONDARY_PATH_FIELD_WIDTH = 320
 COMBO_FIELD_WIDTH = 190
 SMALL_FIELD_WIDTH = 120
 NAME_FIELD_WIDTH = 160
+APP_BACKGROUND = "#f5f7fb"
+CARD_BACKGROUND = "#ffffff"
+BORDER_COLOR = "#d8dee8"
+TEXT_COLOR = "#111827"
 
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
@@ -769,8 +773,10 @@ class SplitApp(QWidget):
     def __init__(self, settings=None):
         super().__init__()
         self.setWindowTitle("Excel Splitter")
+        self.setObjectName("appRoot")
         self.resize(1000, 750)
         setTheme(Theme.LIGHT)
+        self._apply_dashboard_styles()
 
         self.is_running = False
         self.worker = None
@@ -787,6 +793,30 @@ class SplitApp(QWidget):
         self.load_settings()
         self._connect_settings_signals()
 
+    def _apply_dashboard_styles(self):
+        self.setStyleSheet(f"""
+            QWidget#appRoot {{
+                background-color: {APP_BACKGROUND};
+                color: {TEXT_COLOR};
+            }}
+            QWidget#footerBar {{
+                background-color: {APP_BACKGROUND};
+                border-top: 1px solid {BORDER_COLOR};
+            }}
+            QWidget#mainPanelHost {{
+                background-color: transparent;
+            }}
+            SimpleCardWidget#dashboardPanel,
+            SimpleCardWidget#workflowRail {{
+                background-color: {CARD_BACKGROUND};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 8px;
+            }}
+            QLabel {{
+                color: {TEXT_COLOR};
+            }}
+        """)
+
     def _fixed_width(self, widget, width):
         widget.setMinimumWidth(width)
         widget.setMaximumWidth(width)
@@ -794,6 +824,7 @@ class SplitApp(QWidget):
 
     def _panel(self, title, icon=None):
         card = SimpleCardWidget()
+        card.setObjectName("dashboardPanel")
         card.setBorderRadius(8)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 14)
@@ -846,6 +877,7 @@ class SplitApp(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_widget = QWidget()
+        scroll_widget.setObjectName("mainPanelHost")
         self.main_panel_layout = QVBoxLayout(scroll_widget)
         self.main_panel_layout.setContentsMargins(0, 0, 0, 0)
         self.main_panel_layout.setSpacing(10)
@@ -862,6 +894,7 @@ class SplitApp(QWidget):
         self.main_panel_layout.addStretch()
 
         self.footer_bar = QWidget()
+        self.footer_bar.setObjectName("footerBar")
         footer = QHBoxLayout(self.footer_bar)
         footer.setContentsMargins(16, 10, 16, 14)
         footer.setSpacing(10)
@@ -870,6 +903,7 @@ class SplitApp(QWidget):
 
     def _build_workflow_rail(self):
         rail = SimpleCardWidget()
+        rail.setObjectName("workflowRail")
         rail.setBorderRadius(8)
         rail.setFixedWidth(148)
         layout = QVBoxLayout(rail)
@@ -1005,6 +1039,7 @@ class SplitApp(QWidget):
         self.cmb_pdf_engine = self._fixed_width(ComboBox(), 180)
         self.cmb_pdf_engine.addItems(["xlwings", "libreoffice", "none"])
         self.cmb_pdf_engine.setCurrentIndex(0)
+        self.cmb_pdf_engine.currentTextChanged.connect(self.on_pdf_engine_changed)
         self.edit_lo_path = self._fixed_width(LineEdit(), SECONDARY_PATH_FIELD_WIDTH)
         self.edit_lo_path.setPlaceholderText("soffice.exe")
         self.btn_browse_soffice = ToolButton(FIF.FOLDER)
@@ -1013,10 +1048,18 @@ class SplitApp(QWidget):
         options.addWidget(self._labeled("Prefix", self.edit_prefix), 0, 0)
         options.addWidget(self._labeled("Suffix", self.edit_suffix), 0, 1)
         options.addWidget(self._labeled("PDF Engine", self.cmb_pdf_engine), 0, 2)
-        options.addWidget(self._labeled("LibreOffice", self.edit_lo_path), 0, 3)
-        options.addWidget(self.btn_browse_soffice, 0, 4)
-        options.setColumnStretch(5, 1)
+        options.setColumnStretch(3, 1)
         layout.addLayout(options)
+
+        self.lo_path_row_widget = QWidget()
+        lo_row = QHBoxLayout(self.lo_path_row_widget)
+        lo_row.setContentsMargins(0, 0, 0, 0)
+        lo_row.setSpacing(8)
+        lo_row.addWidget(self._labeled("LibreOffice", self.edit_lo_path))
+        lo_row.addWidget(self.btn_browse_soffice)
+        lo_row.addStretch()
+        layout.addWidget(self.lo_path_row_widget)
+        self.on_pdf_engine_changed()
 
         self.main_panel_layout.addWidget(card)
 
@@ -1036,6 +1079,7 @@ class SplitApp(QWidget):
         self.progress_bar = ProgressBar()
         self.progress_bar.setFixedWidth(240)
         self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
         self.btn_open_output = PushButton(FIF.FOLDER, "Open Output Folder")
         self.btn_open_output.setFixedHeight(36)
         self.btn_open_output.clicked.connect(self.open_output_folder)
@@ -1053,6 +1097,8 @@ class SplitApp(QWidget):
         self.txt_log.append(msg)
 
     def set_progress(self, total, current):
+        if self.is_running:
+            self.progress_bar.setVisible(True)
         if total <= 0:
             self.progress_bar.setValue(0)
         else:
@@ -1063,6 +1109,7 @@ class SplitApp(QWidget):
         self.btn_generate.setEnabled(not busy)
         self.btn_generate.setText("Generating..." if busy else "Generate")
         self.btn_reset_settings.setEnabled(not busy)
+        self.progress_bar.setVisible(busy)
         if not busy:
             self.progress_bar.setValue(0)
         self.update_workflow_status()
@@ -1149,6 +1196,7 @@ class SplitApp(QWidget):
             self._loading_settings = False
 
         self.on_template_mode_changed()
+        self.on_pdf_engine_changed()
         self.update_workflow_status()
 
     def reset_settings(self):
@@ -1174,6 +1222,7 @@ class SplitApp(QWidget):
         finally:
             self._loading_settings = False
         self.on_template_mode_changed()
+        self.on_pdf_engine_changed()
         self.update_workflow_status()
 
     def current_template_mode(self):
@@ -1193,6 +1242,14 @@ class SplitApp(QWidget):
         if use_template_file:
             self.refresh_template_mapping(auto=True)
         self.update_workflow_status()
+
+    def on_pdf_engine_changed(self, *_):
+        if not hasattr(self, "lo_path_row_widget"):
+            return
+        use_libreoffice = self.cmb_pdf_engine.currentText().strip().lower() == "libreoffice"
+        self.lo_path_row_widget.setVisible(use_libreoffice)
+        self.edit_lo_path.setVisible(use_libreoffice)
+        self.btn_browse_soffice.setVisible(use_libreoffice)
 
     def _clear_mapping_rows(self):
         while self.mapping_rows_layout.count():

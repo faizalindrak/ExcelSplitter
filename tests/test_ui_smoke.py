@@ -96,6 +96,38 @@ class UISmokeTests(unittest.TestCase):
 
             self.assertEqual(window.mapping_status_labels["Worker"].text(), "Mapped")
 
+    def test_dashboard_uses_explicit_light_surfaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertEqual(window.objectName(), "appRoot")
+            self.assertEqual(window.workflow_rail.objectName(), "workflowRail")
+            self.assertIn("#f5f7fb", window.styleSheet())
+            self.assertIn("#ffffff", window.styleSheet())
+
+    def test_libreoffice_path_row_only_shows_for_libreoffice_pdf_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "lo_path_row_widget"))
+            self.assertTrue(window.lo_path_row_widget.isHidden())
+
+            window.cmb_pdf_engine.setCurrentIndex(window.cmb_pdf_engine.findText("libreoffice"))
+            window.on_pdf_engine_changed()
+
+            self.assertFalse(window.lo_path_row_widget.isHidden())
+
+    def test_footer_progress_is_hidden_until_generation_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(window.progress_bar.isHidden())
+            window.set_busy(True)
+            self.assertFalse(window.progress_bar.isHidden())
+
 
 if __name__ == "__main__":
     unittest.main()
