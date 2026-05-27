@@ -24,7 +24,7 @@
 **Files:**
 - Modify: `tests/test_ui_smoke.py`
 
-- [ ] **Step 1: Add tests for compact dashboard controls**
+- [x] **Step 1: Add tests for compact dashboard controls**
 
 Add the following methods to `UISmokeTests`:
 
@@ -58,7 +58,7 @@ Add the following methods to `UISmokeTests`:
         self.assertFalse(window.mapping_card.isVisible())
 ```
 
-- [ ] **Step 2: Run UI smoke tests and verify failure**
+- [x] **Step 2: Run UI smoke tests and verify failure**
 
 Run: `rtk .venv\Scripts\python.exe -m unittest tests.test_ui_smoke`
 
@@ -69,7 +69,7 @@ Expected: failure because `workflow_rail`, `main_panel_layout`, and `footer_bar`
 **Files:**
 - Modify: `main.py`
 
-- [ ] **Step 1: Update QtWidgets imports**
+- [x] **Step 1: Update QtWidgets imports**
 
 Add `QGridLayout` and `QSizePolicy` to the existing `PySide6.QtWidgets` import:
 
@@ -80,7 +80,7 @@ from PySide6.QtWidgets import (
 )
 ```
 
-- [ ] **Step 2: Add compact width constants below template mode constants**
+- [x] **Step 2: Add compact width constants below template mode constants**
 
 ```python
 PATH_FIELD_WIDTH = 460
@@ -90,7 +90,7 @@ SMALL_FIELD_WIDTH = 120
 NAME_FIELD_WIDTH = 160
 ```
 
-- [ ] **Step 3: Add helper methods inside `SplitApp` before `_build_ui`**
+- [x] **Step 3: Add helper methods inside `SplitApp` before `_build_ui`**
 
 ```python
     def _fixed_width(self, widget, width):
@@ -126,7 +126,7 @@ NAME_FIELD_WIDTH = 160
         return wrap
 ```
 
-- [ ] **Step 4: Run syntax check**
+- [x] **Step 4: Run syntax check**
 
 Run: `rtk python -m py_compile main.py`
 
@@ -137,7 +137,7 @@ Expected: exit code 0.
 **Files:**
 - Modify: `main.py`
 
-- [ ] **Step 1: Replace `_build_ui` with dashboard shell**
+- [x] **Step 1: Replace `_build_ui` with dashboard shell**
 
 Replace the current `_build_ui` method with:
 
@@ -191,7 +191,7 @@ Replace the current `_build_ui` method with:
         root_layout.addWidget(self.footer_bar)
 ```
 
-- [ ] **Step 2: Add workflow rail builder**
+- [x] **Step 2: Add workflow rail builder**
 
 Add this method after `_build_ui`:
 
@@ -223,7 +223,7 @@ Add this method after `_build_ui`:
         return rail
 ```
 
-- [ ] **Step 3: Run UI tests and verify failure moves forward**
+- [x] **Step 3: Run UI tests and verify failure moves forward**
 
 Run: `rtk .venv\Scripts\python.exe -m unittest tests.test_ui_smoke`
 
@@ -234,7 +234,7 @@ Expected: remaining failures from card builders still using `self.scroll_layout`
 **Files:**
 - Modify: `main.py`
 
-- [ ] **Step 1: Rewrite `_build_source_card`**
+- [x] **Step 1: Rewrite `_build_source_card`**
 
 Replace the current `_build_source_card` method with:
 
@@ -278,7 +278,7 @@ Replace the current `_build_source_card` method with:
         self.main_panel_layout.addWidget(card)
 ```
 
-- [ ] **Step 2: Rewrite `_build_template_card`**
+- [x] **Step 2: Rewrite `_build_template_card`**
 
 Replace the current `_build_template_card` method with:
 
@@ -314,7 +314,7 @@ Replace the current `_build_template_card` method with:
         self.main_panel_layout.addWidget(card)
 ```
 
-- [ ] **Step 3: Rewrite `_build_mapping_card`**
+- [x] **Step 3: Rewrite `_build_mapping_card`**
 
 Replace the current `_build_mapping_card` method with:
 
@@ -340,7 +340,7 @@ Replace the current `_build_mapping_card` method with:
         self.main_panel_layout.addWidget(self.mapping_card)
 ```
 
-- [ ] **Step 4: Rewrite `_build_output_card`**
+- [x] **Step 4: Rewrite `_build_output_card`**
 
 Replace the current `_build_output_card` method with:
 
@@ -384,7 +384,7 @@ Replace the current `_build_output_card` method with:
         self.main_panel_layout.addWidget(card)
 ```
 
-- [ ] **Step 5: Add `_build_log_card`**
+- [x] **Step 5: Add `_build_log_card`**
 
 Add this new method before `_build_actions_card`:
 
@@ -399,7 +399,7 @@ Add this new method before `_build_actions_card`:
         self.main_panel_layout.addWidget(card)
 ```
 
-- [ ] **Step 6: Rewrite `_build_actions_card` to receive footer layout**
+- [x] **Step 6: Rewrite `_build_actions_card` to receive footer layout**
 
 Replace the current `_build_actions_card` method with:
 
@@ -426,7 +426,7 @@ Replace the current `_build_actions_card` method with:
         layout.addStretch()
 ```
 
-- [ ] **Step 7: Run UI smoke tests**
+- [x] **Step 7: Run UI smoke tests**
 
 Run: `rtk .venv\Scripts\python.exe -m unittest tests.test_ui_smoke`
 
@@ -437,7 +437,7 @@ Expected: remaining failures around mode visibility or mapping row widths.
 **Files:**
 - Modify: `main.py`
 
-- [ ] **Step 1: Update `on_template_mode_changed`**
+- [x] **Step 1: Update `on_template_mode_changed`**
 
 Replace the body after `use_template_file = ...` with:
 
@@ -451,7 +451,7 @@ Replace the body after `use_template_file = ...` with:
         self.update_workflow_status()
 ```
 
-- [ ] **Step 2: Update `render_mapping_rows` for compact rows**
+- [x] **Step 2: Update `render_mapping_rows` for compact rows**
 
 Inside the `for template_header in self.template_headers:` loop, set bounded row/control widths:
 
@@ -471,7 +471,7 @@ After selecting combo value, add:
 
 Keep the existing `combo.currentTextChanged.connect(self.save_settings)` and `self.mapping_combos[template_header] = combo`.
 
-- [ ] **Step 3: Add workflow status updater**
+- [x] **Step 3: Add workflow status updater**
 
 Add this method before `browse_source`:
 
@@ -492,7 +492,7 @@ Add this method before `browse_source`:
         self.lbl_workflow_status.setText("Ready" if not missing else "Missing: " + ", ".join(missing))
 ```
 
-- [ ] **Step 4: Call workflow status after relevant mutations**
+- [x] **Step 4: Call workflow status after relevant mutations**
 
 Add `self.update_workflow_status()` at the end of:
 
@@ -505,7 +505,7 @@ Add `self.update_workflow_status()` at the end of:
 - `load_headers`
 - `set_busy`
 
-- [ ] **Step 5: Run UI and settings tests**
+- [x] **Step 5: Run UI and settings tests**
 
 Run: `rtk .venv\Scripts\python.exe -m unittest tests.test_ui_smoke tests.test_settings`
 
@@ -516,13 +516,13 @@ Expected: all UI/settings tests pass.
 **Files:**
 - Modify: `dist/ExcelSplitter.exe`
 
-- [ ] **Step 1: Run full tests**
+- [x] **Step 1: Run full tests**
 
 Run: `rtk .venv\Scripts\python.exe -m unittest discover`
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run syntax and whitespace checks**
+- [x] **Step 2: Run syntax and whitespace checks**
 
 Run: `rtk python -m py_compile main.py`
 
@@ -532,19 +532,19 @@ Run: `rtk git diff --check`
 
 Expected: exit code 0.
 
-- [ ] **Step 3: Build executable**
+- [x] **Step 3: Build executable**
 
 Run: `rtk cmd /c build.cmd`
 
 Expected: exit code 0 and `dist\ExcelSplitter.exe` exists. Existing optional PyInstaller hidden-import warnings may still appear.
 
-- [ ] **Step 4: Inspect final status**
+- [x] **Step 4: Inspect final status**
 
 Run: `rtk git status --short`
 
 Expected: only intentional UI redesign, tests, plan, and rebuilt executable changes.
 
-- [ ] **Step 5: Commit implementation**
+- [x] **Step 5: Commit implementation**
 
 Run:
 

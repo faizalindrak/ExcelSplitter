@@ -18,7 +18,7 @@ from openpyxl.utils import get_column_letter
 from PySide6.QtCore import Qt, Signal, QThread, QSettings
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QFileDialog
+    QFileDialog, QGridLayout, QSizePolicy
 )
 from qfluentwidgets import (
     ScrollArea, SimpleCardWidget,
@@ -28,8 +28,6 @@ from qfluentwidgets import (
     setTheme, Theme, FluentIcon as FIF
 )
 
-CHEVRON_DOWN_ICON = getattr(FIF, "CHEVRON_DOWN", None) or FIF.CHEVRON_DOWN_MED
-CHEVRON_RIGHT_ICON = getattr(FIF, "CHEVRON_RIGHT", None) or FIF.CHEVRON_RIGHT_MED
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
 TEMPLATE_MODE_SOURCE_TEMPLATE = "source_template"
 TEMPLATE_MODE_LABELS = {
@@ -37,6 +35,11 @@ TEMPLATE_MODE_LABELS = {
     TEMPLATE_MODE_SOURCE_TEMPLATE: "Use Source as Template",
 }
 TEMPLATE_MODE_BY_LABEL = {label: key for key, label in TEMPLATE_MODE_LABELS.items()}
+PATH_FIELD_WIDTH = 460
+SECONDARY_PATH_FIELD_WIDTH = 320
+COMBO_FIELD_WIDTH = 190
+SMALL_FIELD_WIDTH = 120
+NAME_FIELD_WIDTH = 160
 
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
@@ -762,71 +765,12 @@ class SplitWorker(QThread):
             self.error.emit(str(e))
 
 
-class AccordionCard(SimpleCardWidget):
-    def __init__(self, title, icon=None, parent=None):
-        super().__init__(parent)
-        self.setBorderRadius(8)
-        self._expanded = True
-
-        self._main_layout = QVBoxLayout(self)
-        self._main_layout.setContentsMargins(0, 0, 0, 0)
-        self._main_layout.setSpacing(0)
-
-        self._header = QWidget()
-        self._header.setCursor(Qt.PointingHandCursor)
-        self._header.setFixedHeight(48)
-        header_layout = QHBoxLayout(self._header)
-        header_layout.setContentsMargins(16, 0, 16, 0)
-
-        if icon:
-            icon_widget = ToolButton(icon)
-            icon_widget.setFixedSize(20, 20)
-            icon_widget.setEnabled(False)
-            header_layout.addWidget(icon_widget)
-
-        self._title_label = SubtitleLabel(title)
-        header_layout.addWidget(self._title_label)
-        header_layout.addStretch()
-
-        self._toggle_btn = ToolButton(CHEVRON_DOWN_ICON)
-        self._toggle_btn.setFixedSize(20, 20)
-        self._toggle_btn.clicked.connect(self.toggle)
-        header_layout.addWidget(self._toggle_btn)
-
-        self._main_layout.addWidget(self._header)
-
-        self._content = QWidget()
-        self._content_layout = QVBoxLayout(self._content)
-        self._content_layout.setContentsMargins(16, 8, 16, 16)
-        self._content_layout.setSpacing(12)
-        self._main_layout.addWidget(self._content)
-
-        self._header.mousePressEvent = lambda e: self.toggle()
-
-    @property
-    def content_layout(self):
-        return self._content_layout
-
-    def toggle(self):
-        self._expanded = not self._expanded
-        self._content.setVisible(self._expanded)
-        self._toggle_btn.setIcon(CHEVRON_DOWN_ICON if self._expanded else CHEVRON_RIGHT_ICON)
-
-    def collapse(self):
-        self._expanded = False
-        self._content.setVisible(False)
-        self._toggle_btn.setIcon(CHEVRON_RIGHT_ICON)
-
-    def expand(self):
-        self._expanded = True
-        self._content.setVisible(True)
-        self._toggle_btn.setIcon(CHEVRON_DOWN_ICON)
 class SplitApp(QWidget):
     def __init__(self, settings=None):
         super().__init__()
         self.setWindowTitle("Excel Splitter")
         self.resize(1000, 750)
-        setTheme(Theme.DARK)
+        setTheme(Theme.LIGHT)
 
         self.is_running = False
         self.worker = None
@@ -837,128 +781,196 @@ class SplitApp(QWidget):
         self.template_headers = []
         self.template_col_start = 1
         self.mapping_combos = {}
+        self.mapping_status_labels = {}
 
         self._build_ui()
         self.load_settings()
         self._connect_settings_signals()
 
+    def _fixed_width(self, widget, width):
+        widget.setMinimumWidth(width)
+        widget.setMaximumWidth(width)
+        return widget
+
+    def _panel(self, title, icon=None):
+        card = SimpleCardWidget()
+        card.setBorderRadius(8)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        if icon:
+            icon_widget = ToolButton(icon)
+            icon_widget.setFixedSize(20, 20)
+            icon_widget.setEnabled(False)
+            header.addWidget(icon_widget)
+        header.addWidget(SubtitleLabel(title))
+        header.addStretch()
+        layout.addLayout(header)
+        return card, layout
+
+    def _labeled(self, label, widget):
+        wrap = QWidget()
+        layout = QVBoxLayout(wrap)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(CaptionLabel(label))
+        layout.addWidget(widget)
+        return wrap
+
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
         toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(16, 12, 16, 4)
+        toolbar.setContentsMargins(18, 12, 18, 8)
+        toolbar.setSpacing(10)
+        toolbar.addWidget(SubtitleLabel("Excel Splitter"))
+        self.lbl_workflow_status = CaptionLabel("Ready")
+        toolbar.addWidget(self.lbl_workflow_status)
+        toolbar.addStretch()
         self.btn_reset_settings = PushButton("Reset Settings")
         self.btn_reset_settings.clicked.connect(self.reset_settings)
         toolbar.addWidget(self.btn_reset_settings)
-        toolbar.addStretch()
         root_layout.addLayout(toolbar)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(16, 0, 16, 10)
+        body.setSpacing(14)
+        self.workflow_rail = self._build_workflow_rail()
+        body.addWidget(self.workflow_rail)
 
         scroll = ScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_widget = QWidget()
-        self.scroll_layout = QVBoxLayout(scroll_widget)
-        self.scroll_layout.setContentsMargins(16, 8, 16, 16)
-        self.scroll_layout.setSpacing(12)
+        self.main_panel_layout = QVBoxLayout(scroll_widget)
+        self.main_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_panel_layout.setSpacing(10)
         scroll.setWidget(scroll_widget)
-        root_layout.addWidget(scroll)
+        body.addWidget(scroll, 1)
+        root_layout.addLayout(body, 1)
 
         self._build_source_card()
         self._build_template_card()
         self._build_mapping_card()
         self._build_output_card()
-        self._build_actions_card()
+        self._build_log_card()
 
-        self.scroll_layout.addStretch()
+        self.main_panel_layout.addStretch()
+
+        self.footer_bar = QWidget()
+        footer = QHBoxLayout(self.footer_bar)
+        footer.setContentsMargins(16, 10, 16, 14)
+        footer.setSpacing(10)
+        self._build_actions_card(footer)
+        root_layout.addWidget(self.footer_bar)
+
+    def _build_workflow_rail(self):
+        rail = SimpleCardWidget()
+        rail.setBorderRadius(8)
+        rail.setFixedWidth(148)
+        layout = QVBoxLayout(rail)
+        layout.setContentsMargins(12, 14, 12, 14)
+        layout.setSpacing(10)
+
+        layout.addWidget(CaptionLabel("Workflow"))
+        self.workflow_steps = {}
+        for name in ["Source", "Template", "Output", "Run"]:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            dot = CaptionLabel("○")
+            label = BodyLabel(name)
+            row_layout.addWidget(dot)
+            row_layout.addWidget(label)
+            row_layout.addStretch()
+            layout.addWidget(row)
+            self.workflow_steps[name] = dot
+
+        layout.addStretch()
+        return rail
 
     def _build_source_card(self):
-        card = AccordionCard("Source", FIF.DOCUMENT)
-        layout = card.content_layout
+        card, layout = self._panel("Source", FIF.DOCUMENT)
 
         row1 = QHBoxLayout()
-        self.edit_source = LineEdit()
-        self.edit_source.setPlaceholderText("Path to source Excel file...")
+        self.edit_source = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_source.setPlaceholderText("Source Excel file")
         self.btn_browse_source = ToolButton(FIF.FOLDER)
         self.btn_browse_source.clicked.connect(self.browse_source)
-        row1.addWidget(self.edit_source)
+        row1.addWidget(self._labeled("Workbook", self.edit_source))
         row1.addWidget(self.btn_browse_source)
+        row1.addStretch()
         layout.addLayout(row1)
 
-        row2 = QHBoxLayout()
-        self.cmb_sheet = ComboBox()
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        self.cmb_sheet = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
         self.cmb_sheet.setPlaceholderText("Sheet")
-        self.cmb_sheet.setMinimumWidth(200)
         self.btn_load_sheets = PushButton("Load Sheets")
         self.btn_load_sheets.clicked.connect(self.load_sheets)
-        row2.addWidget(BodyLabel("Sheet:"))
-        row2.addWidget(self.cmb_sheet)
-        row2.addWidget(self.btn_load_sheets)
-        row2.addStretch()
-        layout.addLayout(row2)
-
-        row3 = QHBoxLayout()
-        self.cmb_key = ComboBox()
+        self.cmb_key = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
         self.cmb_key.setPlaceholderText("Key Column")
-        self.cmb_key.setMinimumWidth(200)
         self.btn_load_headers = PushButton("Load Headers")
         self.btn_load_headers.clicked.connect(self.load_headers)
-        row3.addWidget(BodyLabel("Key Column:"))
-        row3.addWidget(self.cmb_key)
-        row3.addWidget(self.btn_load_headers)
-        row3.addStretch()
-        layout.addLayout(row3)
+        self.spin_header_rows = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_header_rows.setRange(1, 100)
+        self.spin_header_rows.setValue(5)
 
-        self.scroll_layout.addWidget(card)
+        grid.addWidget(self._labeled("Sheet", self.cmb_sheet), 0, 0)
+        grid.addWidget(self.btn_load_sheets, 0, 1)
+        grid.addWidget(self._labeled("Key Column", self.cmb_key), 0, 2)
+        grid.addWidget(self.btn_load_headers, 0, 3)
+        grid.addWidget(self._labeled("Header Rows", self.spin_header_rows), 0, 4)
+        grid.setColumnStretch(5, 1)
+        layout.addLayout(grid)
+
+        self.main_panel_layout.addWidget(card)
 
     def _build_template_card(self):
-        card = AccordionCard("Template", FIF.EDIT)
-        layout = card.content_layout
+        card, layout = self._panel("Template", FIF.EDIT)
 
         mode_row = QHBoxLayout()
-        self.cmb_template_mode = ComboBox()
+        self.cmb_template_mode = self._fixed_width(ComboBox(), 220)
         self.cmb_template_mode.addItems([
             TEMPLATE_MODE_LABELS[TEMPLATE_MODE_TEMPLATE_FILE],
             TEMPLATE_MODE_LABELS[TEMPLATE_MODE_SOURCE_TEMPLATE],
         ])
         self.cmb_template_mode.setCurrentIndex(0)
-        self.cmb_template_mode.setFixedWidth(220)
         self.cmb_template_mode.currentTextChanged.connect(self.on_template_mode_changed)
-        mode_row.addWidget(BodyLabel("Template Option:"))
-        mode_row.addWidget(self.cmb_template_mode)
+        mode_row.addWidget(self._labeled("Template Option", self.cmb_template_mode))
         mode_row.addStretch()
         layout.addLayout(mode_row)
 
-        row1 = QHBoxLayout()
-        self.edit_template = LineEdit()
-        self.edit_template.setPlaceholderText("Path to template Excel file...")
+        self.template_file_row_widget = QWidget()
+        row1 = QHBoxLayout(self.template_file_row_widget)
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(8)
+        self.edit_template = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_template.setPlaceholderText("Template Excel file")
         self.btn_browse_template = ToolButton(FIF.FOLDER)
         self.btn_browse_template.clicked.connect(self.browse_template)
-        row1.addWidget(self.edit_template)
+        row1.addWidget(self._labeled("Template Workbook", self.edit_template))
         row1.addWidget(self.btn_browse_template)
-        layout.addLayout(row1)
+        row1.addStretch()
+        layout.addWidget(self.template_file_row_widget)
 
-        row2 = QHBoxLayout()
-        self.spin_header_rows = SpinBox()
-        self.spin_header_rows.setRange(1, 100)
-        self.spin_header_rows.setValue(5)
-        self.spin_header_rows.setFixedWidth(100)
-        row2.addWidget(BodyLabel("Header Rows:"))
-        row2.addWidget(self.spin_header_rows)
-        row2.addStretch()
-        layout.addLayout(row2)
-
-        self.scroll_layout.addWidget(card)
+        self.main_panel_layout.addWidget(card)
 
     def _build_mapping_card(self):
-        self.mapping_card = AccordionCard("Column Mapping", FIF.EDIT)
-        layout = self.mapping_card.content_layout
+        self.mapping_card, layout = self._panel("Column Mapping", FIF.EDIT)
 
         row = QHBoxLayout()
         self.btn_auto_map = PushButton("Auto Map")
         self.btn_auto_map.clicked.connect(lambda: self.refresh_template_mapping(auto=True))
+        self.lbl_mapping_status = CaptionLabel("Map template columns to source columns.")
         row.addWidget(self.btn_auto_map)
-        row.addWidget(CaptionLabel("Required when template headers differ from source headers."))
+        row.addWidget(self.lbl_mapping_status)
         row.addStretch()
         layout.addLayout(row)
 
@@ -968,88 +980,75 @@ class SplitApp(QWidget):
         self.mapping_rows_layout.setSpacing(8)
         layout.addWidget(self.mapping_rows_widget)
 
-        self.scroll_layout.addWidget(self.mapping_card)
+        self.main_panel_layout.addWidget(self.mapping_card)
 
     def _build_output_card(self):
-        card = AccordionCard("Output", FIF.FOLDER)
-        layout = card.content_layout
+        card, layout = self._panel("Output", FIF.FOLDER)
 
         row1 = QHBoxLayout()
-        self.edit_outdir = LineEdit()
-        self.edit_outdir.setPlaceholderText("Output folder...")
+        self.edit_outdir = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_outdir.setPlaceholderText("Output folder")
         self.btn_browse_outdir = ToolButton(FIF.FOLDER)
         self.btn_browse_outdir.clicked.connect(self.browse_outdir)
-        row1.addWidget(self.edit_outdir)
+        row1.addWidget(self._labeled("Folder", self.edit_outdir))
         row1.addWidget(self.btn_browse_outdir)
+        row1.addStretch()
         layout.addLayout(row1)
 
-        row2 = QHBoxLayout()
-        self.cmb_pdf_engine = ComboBox()
+        options = QGridLayout()
+        options.setHorizontalSpacing(10)
+        options.setVerticalSpacing(8)
+        self.edit_prefix = self._fixed_width(LineEdit(), NAME_FIELD_WIDTH)
+        self.edit_prefix.setPlaceholderText("Prefix")
+        self.edit_suffix = self._fixed_width(LineEdit(), NAME_FIELD_WIDTH)
+        self.edit_suffix.setPlaceholderText("Suffix")
+        self.cmb_pdf_engine = self._fixed_width(ComboBox(), 180)
         self.cmb_pdf_engine.addItems(["xlwings", "libreoffice", "none"])
         self.cmb_pdf_engine.setCurrentIndex(0)
-        self.cmb_pdf_engine.setFixedWidth(180)
-        row2.addWidget(BodyLabel("PDF Engine:"))
-        row2.addWidget(self.cmb_pdf_engine)
-        row2.addStretch()
-        layout.addLayout(row2)
-
-        row3 = QHBoxLayout()
-        self.edit_lo_path = LineEdit()
-        self.edit_lo_path.setPlaceholderText("Path to soffice.exe (optional)...")
+        self.edit_lo_path = self._fixed_width(LineEdit(), SECONDARY_PATH_FIELD_WIDTH)
+        self.edit_lo_path.setPlaceholderText("soffice.exe")
         self.btn_browse_soffice = ToolButton(FIF.FOLDER)
         self.btn_browse_soffice.clicked.connect(self.browse_soffice)
-        row3.addWidget(BodyLabel("LibreOffice:"))
-        row3.addWidget(self.edit_lo_path)
-        row3.addWidget(self.btn_browse_soffice)
-        layout.addLayout(row3)
 
-        row4 = QHBoxLayout()
-        self.edit_prefix = LineEdit()
-        self.edit_prefix.setPlaceholderText("Prefix...")
-        self.edit_prefix.setFixedWidth(200)
-        self.edit_suffix = LineEdit()
-        self.edit_suffix.setPlaceholderText("Suffix...")
-        self.edit_suffix.setFixedWidth(200)
-        row4.addWidget(BodyLabel("Prefix:"))
-        row4.addWidget(self.edit_prefix)
-        row4.addWidget(BodyLabel("Suffix:"))
-        row4.addWidget(self.edit_suffix)
-        row4.addStretch()
-        layout.addLayout(row4)
+        options.addWidget(self._labeled("Prefix", self.edit_prefix), 0, 0)
+        options.addWidget(self._labeled("Suffix", self.edit_suffix), 0, 1)
+        options.addWidget(self._labeled("PDF Engine", self.cmb_pdf_engine), 0, 2)
+        options.addWidget(self._labeled("LibreOffice", self.edit_lo_path), 0, 3)
+        options.addWidget(self.btn_browse_soffice, 0, 4)
+        options.setColumnStretch(5, 1)
+        layout.addLayout(options)
 
-        self.scroll_layout.addWidget(card)
+        self.main_panel_layout.addWidget(card)
 
-    def _build_actions_card(self):
-        card = AccordionCard("Actions", FIF.PLAY)
-        layout = card.content_layout
+    def _build_log_card(self):
+        card, layout = self._panel("Log")
+        self.txt_log = TextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setMinimumHeight(130)
+        self.txt_log.setMaximumHeight(180)
+        layout.addWidget(self.txt_log)
+        self.main_panel_layout.addWidget(card)
 
-        btn_row = QHBoxLayout()
+    def _build_actions_card(self, layout):
         self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")
-        self.btn_generate.setFixedHeight(40)
+        self.btn_generate.setFixedHeight(38)
         self.btn_generate.clicked.connect(self.on_run_clicked)
+        self.progress_bar = ProgressBar()
+        self.progress_bar.setFixedWidth(240)
+        self.progress_bar.setValue(0)
         self.btn_open_output = PushButton(FIF.FOLDER, "Open Output Folder")
-        self.btn_open_output.setFixedHeight(40)
+        self.btn_open_output.setFixedHeight(36)
         self.btn_open_output.clicked.connect(self.open_output_folder)
         self.btn_open_output.setVisible(False)
         self.btn_debug = PushButton("Debug Excel")
-        self.btn_debug.setFixedHeight(40)
+        self.btn_debug.setFixedHeight(36)
         self.btn_debug.clicked.connect(self.debug_excel)
-        btn_row.addWidget(self.btn_generate)
-        btn_row.addWidget(self.btn_open_output)
-        btn_row.addWidget(self.btn_debug)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
 
-        self.progress_bar = ProgressBar()
-        self.progress_bar.setValue(0)
+        layout.addWidget(self.btn_generate)
         layout.addWidget(self.progress_bar)
-
-        self.txt_log = TextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setMinimumHeight(200)
-        layout.addWidget(self.txt_log)
-
-        self.scroll_layout.addWidget(card)
+        layout.addWidget(self.btn_open_output)
+        layout.addWidget(self.btn_debug)
+        layout.addStretch()
     def log(self, msg):
         self.txt_log.append(msg)
 
@@ -1066,6 +1065,7 @@ class SplitApp(QWidget):
         self.btn_reset_settings.setEnabled(not busy)
         if not busy:
             self.progress_bar.setValue(0)
+        self.update_workflow_status()
 
     def _connect_settings_signals(self):
         for edit in [
@@ -1103,6 +1103,7 @@ class SplitApp(QWidget):
         self.settings.setValue("suffix", self.edit_suffix.text().strip())
         self.settings.setValue("column_mapping", json.dumps(mapping))
         self.settings.sync()
+        self.update_workflow_status()
 
     def load_settings(self):
         self._loading_settings = True
@@ -1148,6 +1149,7 @@ class SplitApp(QWidget):
             self._loading_settings = False
 
         self.on_template_mode_changed()
+        self.update_workflow_status()
 
     def reset_settings(self):
         self.settings.clear()
@@ -1172,6 +1174,7 @@ class SplitApp(QWidget):
         finally:
             self._loading_settings = False
         self.on_template_mode_changed()
+        self.update_workflow_status()
 
     def current_template_mode(self):
         return TEMPLATE_MODE_BY_LABEL.get(
@@ -1183,11 +1186,13 @@ class SplitApp(QWidget):
         if not hasattr(self, "mapping_card"):
             return
         use_template_file = self.current_template_mode() == TEMPLATE_MODE_TEMPLATE_FILE
-        self.edit_template.setEnabled(use_template_file)
-        self.btn_browse_template.setEnabled(use_template_file)
+        self.template_file_row_widget.setVisible(use_template_file)
+        self.edit_template.setVisible(use_template_file)
+        self.btn_browse_template.setVisible(use_template_file)
         self.mapping_card.setVisible(use_template_file)
         if use_template_file:
             self.refresh_template_mapping(auto=True)
+        self.update_workflow_status()
 
     def _clear_mapping_rows(self):
         while self.mapping_rows_layout.count():
@@ -1196,6 +1201,7 @@ class SplitApp(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self.mapping_combos = {}
+        self.mapping_status_labels = {}
 
     def render_mapping_rows(self, mapping=None):
         self._clear_mapping_rows()
@@ -1207,22 +1213,31 @@ class SplitApp(QWidget):
         source_choices = [""] + self.source_headers
         for template_header in self.template_headers:
             row_widget = QWidget()
+            row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row = QHBoxLayout(row_widget)
             row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(BodyLabel(template_header))
+            row.addWidget(self._fixed_width(BodyLabel(template_header), 220))
             row.addWidget(BodyLabel("->"))
-            combo = ComboBox()
+            combo = self._fixed_width(ComboBox(), 240)
             combo.addItems(source_choices)
             selected = mapping.get(template_header)
             if selected:
                 idx = combo.findText(selected)
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
-            combo.currentTextChanged.connect(self.save_settings)
+            status = CaptionLabel("Mapped" if combo.currentText().strip() else "Missing")
+
+            def on_mapping_changed(value, label=status):
+                label.setText("Mapped" if value.strip() else "Missing")
+                self.save_settings()
+
+            combo.currentTextChanged.connect(on_mapping_changed)
             row.addWidget(combo)
+            row.addWidget(status)
             row.addStretch()
             self.mapping_rows_layout.addWidget(row_widget)
             self.mapping_combos[template_header] = combo
+            self.mapping_status_labels[template_header] = status
 
     def collect_column_mapping(self):
         return {
@@ -1266,6 +1281,28 @@ class SplitApp(QWidget):
             self.template_headers = []
             self.render_mapping_rows({})
 
+    def update_workflow_status(self):
+        if not hasattr(self, "workflow_steps"):
+            return
+
+        states = {
+            "Source": bool(
+                self.edit_source.text().strip()
+                and self.cmb_sheet.currentText().strip()
+                and self.cmb_key.currentText().strip()
+            ),
+            "Template": (
+                self.current_template_mode() == TEMPLATE_MODE_SOURCE_TEMPLATE
+                or bool(self.edit_template.text().strip())
+            ),
+            "Output": bool(self.edit_outdir.text().strip()),
+            "Run": not self.is_running,
+        }
+        for name, ready in states.items():
+            self.workflow_steps[name].setText("●" if ready else "○")
+        missing = [name for name, ready in states.items() if not ready and name != "Run"]
+        self.lbl_workflow_status.setText("Ready" if not missing else "Missing: " + ", ".join(missing))
+
     def browse_source(self):
         f, _ = QFileDialog.getOpenFileName(
             self, "Pilih source Excel",
@@ -1274,6 +1311,7 @@ class SplitApp(QWidget):
         if f:
             self.edit_source.setText(f)
             self.log(f"Source: {f}")
+            self.update_workflow_status()
 
     def browse_template(self):
         f, _ = QFileDialog.getOpenFileName(
@@ -1284,12 +1322,14 @@ class SplitApp(QWidget):
             self.edit_template.setText(f)
             self.log(f"Template: {f}")
             self.refresh_template_mapping(auto=True)
+            self.update_workflow_status()
 
     def browse_outdir(self):
         d = QFileDialog.getExistingDirectory(self, "Pilih output folder")
         if d:
             self.edit_outdir.setText(d)
             self.log(f"Output: {d}")
+            self.update_workflow_status()
 
     def browse_soffice(self):
         f, _ = QFileDialog.getOpenFileName(
@@ -1313,6 +1353,7 @@ class SplitApp(QWidget):
             if sheets:
                 self.cmb_sheet.setCurrentIndex(0)
             self.log(f"Sheets loaded: {', '.join(sheets)}")
+            self.update_workflow_status()
         except Exception as e:
             InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
@@ -1335,6 +1376,7 @@ class SplitApp(QWidget):
                 self.cmb_key.setCurrentIndex(0)
             self.log(f"Headers loaded: {headers}")
             self.refresh_template_mapping(auto=True)
+            self.update_workflow_status()
         except Exception as e:
             InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
