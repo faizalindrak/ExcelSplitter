@@ -35,6 +35,13 @@ TEMPLATE_MODE_LABELS = {
     TEMPLATE_MODE_SOURCE_TEMPLATE: "Use Source as Template",
 }
 TEMPLATE_MODE_BY_LABEL = {label: key for key, label in TEMPLATE_MODE_LABELS.items()}
+OUTPUT_TYPE_EXCEL = "excel"
+OUTPUT_TYPE_PDF = "pdf"
+OUTPUT_TYPE_LABELS = {
+    OUTPUT_TYPE_EXCEL: "Excel",
+    OUTPUT_TYPE_PDF: "PDF",
+}
+OUTPUT_TYPE_BY_LABEL = {label: key for key, label in OUTPUT_TYPE_LABELS.items()}
 PATH_FIELD_WIDTH = 460
 SECONDARY_PATH_FIELD_WIDTH = 320
 COMBO_FIELD_WIDTH = 190
@@ -67,6 +74,21 @@ except Exception:
 def safe_file_part(s: str) -> str:
     s = "" if s is None else str(s)
     return re.sub(r'[:\\/\?\*\[\]<>|"]', "_", s).strip() or "Key"
+
+def join_output_name_parts(prefix: str, key_part: str, suffix: str) -> str:
+    parts = []
+    if prefix:
+        parts.append(prefix)
+    parts.append(key_part)
+    if suffix:
+        parts.append(suffix)
+    return " ".join(parts)
+
+def build_output_stem(prefix: str, key_value, suffix: str) -> str:
+    return join_output_name_parts(prefix, safe_file_part(key_value), suffix)
+
+def output_extension(output_file_type: str) -> str:
+    return ".pdf" if output_file_type == OUTPUT_TYPE_PDF else ".xlsx"
 
 def set_print_titles_and_area(ws, header_rows: int, last_col_idx: int, last_data_row: int):
     ws.print_title_rows = f"1:{header_rows}"
@@ -119,6 +141,45 @@ def read_template_headers(path: Path, header_rows: int) -> tuple[list[str], int]
                 empty_streak = 0
             col_idx += 1
         return headers, first_col or 1
+    finally:
+        wb.close()
+
+def detect_excel_header_row(path: Path, sheet_name: str | None = None, max_rows: int = 20) -> int:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[sheet_name] if sheet_name else wb.active
+        best_row, best_score = 1, -1
+        scan_limit = min(max_rows, ws.max_row)
+        rows = list(ws.iter_rows(min_row=1, max_row=scan_limit, values_only=True))
+        for offset, row in enumerate(rows):
+            row_number = offset + 1
+            values = [str(value).strip() for value in row if value is not None and str(value).strip()]
+            if not values:
+                continue
+
+            text_count = sum(1 for value in values if re.search(r"[A-Za-z]", value))
+            numeric_count = len(values) - text_count
+            unique_count = len({normalize_header(value) or value.lower() for value in values})
+            next_values = []
+            if offset + 1 < len(rows):
+                next_values = [
+                    str(value).strip()
+                    for value in rows[offset + 1]
+                    if value is not None and str(value).strip()
+                ]
+
+            score = (len(values) * 4) + (text_count * 2) + unique_count
+            if next_values:
+                score += min(len(next_values), len(values))
+            if len(values) == 1:
+                score -= 4
+            if numeric_count > text_count:
+                score -= 3
+
+            if score > best_score:
+                best_row, best_score = row_number, score
+
+        return best_row
     finally:
         wb.close()
 
@@ -431,10 +492,25 @@ def split_excel_with_template(
     source_path: Path, sheet_name: str, key_col, template_path: Path, out_dir: Path,
     header_rows: int, pdf_engine: str = "xlwings", soffice_path: str | None = None,
     prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None,
-    template_mode: str = TEMPLATE_MODE_TEMPLATE_FILE, column_mapping: dict | None = None
+    template_mode: str = TEMPLATE_MODE_TEMPLATE_FILE, column_mapping: dict | None = None,
+    source_header_rows: int | None = None, template_header_rows: int | None = None,
+    output_file_type: str | None = None
 ):
     if status_cb is None: status_cb = lambda msg: None
     if progress_cb is None: progress_cb = lambda t, c: None
+    source_header_rows = source_header_rows or header_rows
+    template_header_rows = template_header_rows or header_rows
+    if output_file_type is None:
+        output_file_type = (
+            OUTPUT_TYPE_EXCEL
+            if (pdf_engine or "none").lower() == "none"
+            else OUTPUT_TYPE_PDF
+        )
+    if output_file_type not in {OUTPUT_TYPE_EXCEL, OUTPUT_TYPE_PDF}:
+        raise ValueError(f"Tipe output tidak didukung: {output_file_type}")
+    effective_pdf_engine = "none" if output_file_type == OUTPUT_TYPE_EXCEL else (pdf_engine or "xlwings")
+    if output_file_type == OUTPUT_TYPE_PDF and effective_pdf_engine == "none":
+        effective_pdf_engine = "xlwings"
 
     if template_mode not in {TEMPLATE_MODE_TEMPLATE_FILE, TEMPLATE_MODE_SOURCE_TEMPLATE}:
         raise ValueError(f"Template mode tidak didukung: {template_mode}")
@@ -468,8 +544,8 @@ def split_excel_with_template(
             status_cb(f"Debug: Test read failed: {str(test_e)}")
             raise test_e
 
-        # Read with header at the correct row (header_rows is 1-indexed)
-        df = pd.read_excel(source_path, sheet_name=sheet_name, header=header_rows - 1, dtype=object)
+        # Read with header at the correct row (source_header_rows is 1-indexed)
+        df = pd.read_excel(source_path, sheet_name=sheet_name, header=source_header_rows - 1, dtype=object)
 
         elapsed = time.time() - start_time
         status_cb(f"Debug: Successfully read {len(df)} rows in {elapsed:.2f} seconds")
@@ -519,7 +595,7 @@ def split_excel_with_template(
     templ_cols = None
     templ_col_start = 1
     if template_mode == TEMPLATE_MODE_TEMPLATE_FILE:
-        templ_cols, templ_col_start = read_template_headers(template_path, header_rows)
+        templ_cols, templ_col_start = read_template_headers(template_path, template_header_rows)
         if not templ_cols:
             raise ValueError("Header template tidak ditemukan untuk mapping kolom.")
 
@@ -598,27 +674,19 @@ def split_excel_with_template(
                     wb.remove(sheet)
 
             ws = wb[sheet_name]
-            start_row = header_rows + 1
+            start_row = source_header_rows + 1
             keep_rows = {int(idx) + start_row for idx in group.index}
             for row_idx in range(ws.max_row, start_row - 1, -1):
                 if row_idx not in keep_rows:
                     ws.delete_rows(row_idx)
 
-            set_print_titles_and_area(ws, header_rows, ws.max_column, ws.max_row)
+            set_print_titles_and_area(ws, source_header_rows, ws.max_column, ws.max_row)
 
-            key_part = safe_file_part(key_val)
-            parts = []
-            if prefix:
-                parts.append(prefix)
-            parts.append(key_part)
-            if suffix:
-                parts.append(suffix)
-
-            out_name = " ".join(parts)
+            out_name = build_output_stem(prefix, key_val, suffix)
             xlsx_out = out_dir / f"{out_name}.xlsx"
             wb.save(xlsx_out)
 
-            eng = (pdf_engine or "none").lower()
+            eng = (effective_pdf_engine or "none").lower()
             if eng != "none":
                 if eng == "libreoffice":
                     export_pdf_via_lo(xlsx_out, soffice_path=soffice_path)
@@ -629,7 +697,7 @@ def split_excel_with_template(
         # 1) Tulis XLSX dari template
         wb = load_workbook(template_path)
         ws = wb.active
-        start_row = header_rows + 1
+        start_row = template_header_rows + 1
 
         # Comprehensive cleanup to eliminate all Excel repair warnings
         try:
@@ -712,23 +780,15 @@ def split_excel_with_template(
 
         last_data_row = start_row + len(values) - 1
         last_col = templ_col_start + group.shape[1] - 1
-        set_print_titles_and_area(ws, header_rows, max(1, last_col), last_data_row)
+        set_print_titles_and_area(ws, template_header_rows, max(1, last_col), last_data_row)
 
         # Build filename with prefix and suffix
-        key_part = safe_file_part(key_val)
-        parts = []
-        if prefix:
-            parts.append(prefix)
-        parts.append(key_part)
-        if suffix:
-            parts.append(suffix)
-
-        out_name = " ".join(parts)
+        out_name = build_output_stem(prefix, key_val, suffix)
         xlsx_out = out_dir / f"{out_name}.xlsx"
         wb.save(xlsx_out)
 
         # 2) PDF (opsional)
-        eng = (pdf_engine or "none").lower()
+        eng = (effective_pdf_engine or "none").lower()
         if eng != "none":
             if eng == "libreoffice":
                 export_pdf_via_lo(xlsx_out, soffice_path=soffice_path)
@@ -739,7 +799,7 @@ def split_excel_with_template(
     progress_cb(total, total)
 
     # Final cleanup for Excel COM sessions
-    if (pdf_engine or "none").lower() == "xlwings":
+    if (effective_pdf_engine or "none").lower() == "xlwings":
         cleanup_excel_com()
 
 
@@ -770,6 +830,9 @@ class SplitWorker(QThread):
                 suffix=self.params['suffix'],
                 template_mode=self.params.get('template_mode', TEMPLATE_MODE_TEMPLATE_FILE),
                 column_mapping=self.params.get('column_mapping'),
+                source_header_rows=self.params.get('source_header_rows'),
+                template_header_rows=self.params.get('template_header_rows'),
+                output_file_type=self.params.get('output_file_type'),
                 status_cb=self.status.emit,
                 progress_cb=lambda t, c: self.progress.emit(t, c)
             )
@@ -978,16 +1041,20 @@ class SplitApp(QWidget):
         self.cmb_key.setPlaceholderText("Key Column")
         self.btn_load_headers = self._field_action_button(PushButton("Load Headers"))
         self.btn_load_headers.clicked.connect(self.load_headers)
-        self.spin_header_rows = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
-        self.spin_header_rows.setRange(1, 100)
-        self.spin_header_rows.setValue(5)
+        self.spin_source_header_rows = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_source_header_rows.setRange(1, 100)
+        self.spin_source_header_rows.setValue(5)
+        self.spin_header_rows = self.spin_source_header_rows
+        self.btn_detect_source_header = self._field_action_button(PushButton("Detect"))
+        self.btn_detect_source_header.clicked.connect(self.detect_source_header)
 
         grid.addWidget(self._labeled("Sheet", self.cmb_sheet), 0, 0)
         grid.addWidget(self.btn_load_sheets, 0, 1, Qt.AlignBottom)
-        grid.addWidget(self._labeled("Key Column", self.cmb_key), 0, 2)
-        grid.addWidget(self.btn_load_headers, 0, 3, Qt.AlignBottom)
-        grid.addWidget(self._labeled("Header Rows", self.spin_header_rows), 0, 4)
-        grid.setColumnStretch(5, 1)
+        grid.addWidget(self._labeled("Source Header Row", self.spin_source_header_rows), 0, 2)
+        grid.addWidget(self.btn_detect_source_header, 0, 3, Qt.AlignBottom)
+        grid.addWidget(self._labeled("Key Column", self.cmb_key), 0, 4)
+        grid.addWidget(self.btn_load_headers, 0, 5, Qt.AlignBottom)
+        grid.setColumnStretch(6, 1)
         layout.addLayout(grid)
 
         self.main_panel_layout.addWidget(card)
@@ -1006,6 +1073,20 @@ class SplitApp(QWidget):
         mode_row.addWidget(self._labeled("Template Option", self.cmb_template_mode))
         mode_row.addStretch()
         layout.addLayout(mode_row)
+
+        self.template_header_row_widget = QWidget()
+        header_row = QHBoxLayout(self.template_header_row_widget)
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+        self.spin_template_header_rows = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
+        self.spin_template_header_rows.setRange(1, 100)
+        self.spin_template_header_rows.setValue(5)
+        self.btn_detect_template_header = self._field_action_button(PushButton("Detect"))
+        self.btn_detect_template_header.clicked.connect(self.detect_template_header)
+        header_row.addWidget(self._labeled("Template Header Row", self.spin_template_header_rows))
+        header_row.addWidget(self.btn_detect_template_header, 0, Qt.AlignBottom)
+        header_row.addStretch()
+        layout.addWidget(self.template_header_row_widget)
 
         self.template_file_row_widget = QWidget()
         row1 = QHBoxLayout(self.template_file_row_widget)
@@ -1045,14 +1126,31 @@ class SplitApp(QWidget):
     def _build_output_card(self):
         card, layout = self._panel("Output", FIF.FOLDER)
 
-        row1 = QHBoxLayout()
+        row1 = QGridLayout()
+        row1.setHorizontalSpacing(10)
+        row1.setVerticalSpacing(8)
         self.edit_outdir = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
         self.edit_outdir.setPlaceholderText("Output folder")
         self.btn_browse_outdir = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_outdir.clicked.connect(self.browse_outdir)
-        row1.addWidget(self._labeled("Folder", self.edit_outdir))
-        row1.addWidget(self.btn_browse_outdir, 0, Qt.AlignBottom)
-        row1.addStretch()
+        self.cmb_output_type = self._fixed_width(ComboBox(), 120)
+        self.cmb_output_type.addItems([
+            OUTPUT_TYPE_LABELS[OUTPUT_TYPE_EXCEL],
+            OUTPUT_TYPE_LABELS[OUTPUT_TYPE_PDF],
+        ])
+        self.cmb_output_type.setCurrentIndex(0)
+        self.cmb_output_type.currentTextChanged.connect(self.on_output_type_changed)
+        self.cmb_pdf_engine = self._fixed_width(ComboBox(), 160)
+        self.cmb_pdf_engine.addItems(["xlwings", "libreoffice"])
+        self.cmb_pdf_engine.setCurrentIndex(0)
+        self.cmb_pdf_engine.currentTextChanged.connect(self.on_pdf_engine_changed)
+        self.pdf_engine_field_widget = self._labeled("PDF Engine", self.cmb_pdf_engine)
+
+        row1.addWidget(self._labeled("Folder", self.edit_outdir), 0, 0)
+        row1.addWidget(self.btn_browse_outdir, 0, 1, Qt.AlignBottom)
+        row1.addWidget(self._labeled("Output Type", self.cmb_output_type), 0, 2)
+        row1.addWidget(self.pdf_engine_field_widget, 0, 3)
+        row1.setColumnStretch(4, 1)
         layout.addLayout(row1)
 
         options = QGridLayout()
@@ -1062,18 +1160,15 @@ class SplitApp(QWidget):
         self.edit_prefix.setPlaceholderText("Prefix")
         self.edit_suffix = self._fixed_width(LineEdit(), NAME_FIELD_WIDTH)
         self.edit_suffix.setPlaceholderText("Suffix")
-        self.cmb_pdf_engine = self._fixed_width(ComboBox(), 180)
-        self.cmb_pdf_engine.addItems(["xlwings", "libreoffice", "none"])
-        self.cmb_pdf_engine.setCurrentIndex(0)
-        self.cmb_pdf_engine.currentTextChanged.connect(self.on_pdf_engine_changed)
         self.edit_lo_path = self._fixed_width(LineEdit(), SECONDARY_PATH_FIELD_WIDTH)
         self.edit_lo_path.setPlaceholderText("soffice.exe")
         self.btn_browse_soffice = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_soffice.clicked.connect(self.browse_soffice)
+        self.lbl_filename_preview = CaptionLabel()
 
         options.addWidget(self._labeled("Prefix", self.edit_prefix), 0, 0)
         options.addWidget(self._labeled("Suffix", self.edit_suffix), 0, 1)
-        options.addWidget(self._labeled("PDF Engine", self.cmb_pdf_engine), 0, 2)
+        options.addWidget(self._labeled("Preview", self.lbl_filename_preview), 0, 2)
         options.setColumnStretch(3, 1)
         layout.addLayout(options)
 
@@ -1085,7 +1180,7 @@ class SplitApp(QWidget):
         lo_row.addWidget(self.btn_browse_soffice, 0, Qt.AlignBottom)
         lo_row.addStretch()
         layout.addWidget(self.lo_path_row_widget)
-        self.on_pdf_engine_changed()
+        self.on_output_type_changed()
 
         self.main_panel_layout.addWidget(card)
 
@@ -1151,10 +1246,23 @@ class SplitApp(QWidget):
         ]:
             edit.editingFinished.connect(self.save_settings)
 
-        for combo in [self.cmb_sheet, self.cmb_key, self.cmb_template_mode, self.cmb_pdf_engine]:
-            combo.currentTextChanged.connect(self.save_settings)
+        for edit in [self.edit_prefix, self.edit_suffix]:
+            edit.textChanged.connect(self.update_filename_preview)
 
-        self.spin_header_rows.valueChanged.connect(self.save_settings)
+        for combo in [
+            self.cmb_sheet,
+            self.cmb_key,
+            self.cmb_template_mode,
+            self.cmb_output_type,
+            self.cmb_pdf_engine,
+        ]:
+            combo.currentTextChanged.connect(self.save_settings)
+        self.cmb_key.currentTextChanged.connect(self.update_filename_preview)
+
+        self.spin_source_header_rows.valueChanged.connect(self.save_settings)
+        self.spin_source_header_rows.valueChanged.connect(lambda *_: self.refresh_template_mapping(auto=True))
+        self.spin_template_header_rows.valueChanged.connect(self.save_settings)
+        self.spin_template_header_rows.valueChanged.connect(lambda *_: self.refresh_template_mapping(auto=True))
 
     def save_settings(self):
         if self._loading_settings:
@@ -1168,8 +1276,11 @@ class SplitApp(QWidget):
         self.settings.setValue("key_col", self.cmb_key.currentText().strip())
         self.settings.setValue("template_mode", self.current_template_mode())
         self.settings.setValue("template_path", self.edit_template.text().strip())
-        self.settings.setValue("header_rows", self.spin_header_rows.value())
+        self.settings.setValue("header_rows", self.spin_source_header_rows.value())
+        self.settings.setValue("source_header_rows", self.spin_source_header_rows.value())
+        self.settings.setValue("template_header_rows", self.spin_template_header_rows.value())
         self.settings.setValue("output_dir", self.edit_outdir.text().strip())
+        self.settings.setValue("output_file_type", self.current_output_file_type())
         self.settings.setValue("pdf_engine", self.cmb_pdf_engine.currentText().strip().lower())
         self.settings.setValue("libreoffice_path", self.edit_lo_path.text().strip())
         self.settings.setValue("prefix", self.edit_prefix.text().strip())
@@ -1183,7 +1294,13 @@ class SplitApp(QWidget):
         try:
             self.edit_source.setText(self.settings.value("source_path", ""))
             self.edit_template.setText(self.settings.value("template_path", ""))
-            self.spin_header_rows.setValue(int(self.settings.value("header_rows", 5)))
+            legacy_header_rows = self.settings.value("header_rows", 5)
+            self.spin_source_header_rows.setValue(
+                int(self.settings.value("source_header_rows", legacy_header_rows))
+            )
+            self.spin_template_header_rows.setValue(
+                int(self.settings.value("template_header_rows", legacy_header_rows))
+            )
             self.edit_outdir.setText(self.settings.value("output_dir", ""))
             self.edit_lo_path.setText(self.settings.value("libreoffice_path", ""))
             self.edit_prefix.setText(self.settings.value("prefix", ""))
@@ -1208,6 +1325,21 @@ class SplitApp(QWidget):
                 self.cmb_template_mode.setCurrentIndex(mode_idx)
 
             pdf_engine = self.settings.value("pdf_engine", "xlwings")
+            output_file_type = self.settings.value("output_file_type", "")
+            if not output_file_type:
+                has_legacy_pdf_engine = self.settings.contains("pdf_engine")
+                output_file_type = (
+                    OUTPUT_TYPE_PDF
+                    if has_legacy_pdf_engine and str(pdf_engine).strip().lower() not in {"", "none"}
+                    else OUTPUT_TYPE_EXCEL
+                )
+            output_label = OUTPUT_TYPE_LABELS.get(output_file_type, OUTPUT_TYPE_LABELS[OUTPUT_TYPE_EXCEL])
+            output_idx = self.cmb_output_type.findText(output_label)
+            if output_idx >= 0:
+                self.cmb_output_type.setCurrentIndex(output_idx)
+
+            if str(pdf_engine).strip().lower() == "none":
+                pdf_engine = "xlwings"
             pdf_idx = self.cmb_pdf_engine.findText(pdf_engine)
             if pdf_idx >= 0:
                 self.cmb_pdf_engine.setCurrentIndex(pdf_idx)
@@ -1222,8 +1354,9 @@ class SplitApp(QWidget):
             self._loading_settings = False
 
         self.on_template_mode_changed()
-        self.on_pdf_engine_changed()
+        self.on_output_type_changed()
         self.update_workflow_status()
+        self.update_filename_preview()
 
     def reset_settings(self):
         self.settings.clear()
@@ -1239,8 +1372,10 @@ class SplitApp(QWidget):
             self.cmb_sheet.clear()
             self.cmb_key.clear()
             self.cmb_template_mode.setCurrentIndex(0)
+            self.cmb_output_type.setCurrentIndex(0)
             self.cmb_pdf_engine.setCurrentIndex(0)
-            self.spin_header_rows.setValue(5)
+            self.spin_source_header_rows.setValue(5)
+            self.spin_template_header_rows.setValue(5)
             self.source_headers = []
             self.template_headers = []
             self.saved_column_mapping = {}
@@ -1248,8 +1383,9 @@ class SplitApp(QWidget):
         finally:
             self._loading_settings = False
         self.on_template_mode_changed()
-        self.on_pdf_engine_changed()
+        self.on_output_type_changed()
         self.update_workflow_status()
+        self.update_filename_preview()
 
     def current_template_mode(self):
         return TEMPLATE_MODE_BY_LABEL.get(
@@ -1257,25 +1393,60 @@ class SplitApp(QWidget):
             TEMPLATE_MODE_TEMPLATE_FILE,
         )
 
+    def current_output_file_type(self):
+        return OUTPUT_TYPE_BY_LABEL.get(
+            self.cmb_output_type.currentText(),
+            OUTPUT_TYPE_EXCEL,
+        )
+
     def on_template_mode_changed(self):
         if not hasattr(self, "mapping_card"):
             return
         use_template_file = self.current_template_mode() == TEMPLATE_MODE_TEMPLATE_FILE
+        self.template_header_row_widget.setVisible(use_template_file)
         self.template_file_row_widget.setVisible(use_template_file)
         self.edit_template.setVisible(use_template_file)
         self.btn_browse_template.setVisible(use_template_file)
+        self.spin_template_header_rows.setVisible(use_template_file)
+        self.btn_detect_template_header.setVisible(use_template_file)
         self.mapping_card.setVisible(use_template_file)
         if use_template_file:
             self.refresh_template_mapping(auto=True)
         self.update_workflow_status()
 
+    def on_output_type_changed(self, *_):
+        if not hasattr(self, "pdf_engine_field_widget"):
+            return
+        use_pdf = self.current_output_file_type() == OUTPUT_TYPE_PDF
+        self.pdf_engine_field_widget.setVisible(use_pdf)
+        self.cmb_pdf_engine.setVisible(use_pdf)
+        self.on_pdf_engine_changed()
+        self.update_filename_preview()
+        self.update_workflow_status()
+
     def on_pdf_engine_changed(self, *_):
         if not hasattr(self, "lo_path_row_widget"):
             return
-        use_libreoffice = self.cmb_pdf_engine.currentText().strip().lower() == "libreoffice"
+        use_libreoffice = (
+            self.current_output_file_type() == OUTPUT_TYPE_PDF
+            and self.cmb_pdf_engine.currentText().strip().lower() == "libreoffice"
+        )
         self.lo_path_row_widget.setVisible(use_libreoffice)
         self.edit_lo_path.setVisible(use_libreoffice)
         self.btn_browse_soffice.setVisible(use_libreoffice)
+        self.update_filename_preview()
+
+    def update_filename_preview(self, *_):
+        if not hasattr(self, "lbl_filename_preview"):
+            return
+        key_label = self.cmb_key.currentText().strip() or "key"
+        key_preview = f"<{key_label} value>"
+        filename = join_output_name_parts(
+            self.edit_prefix.text().strip(),
+            key_preview,
+            self.edit_suffix.text().strip(),
+        ) + output_extension(self.current_output_file_type())
+        self.lbl_filename_preview.setText(filename)
 
     def _clear_mapping_rows(self):
         while self.mapping_rows_layout.count():
@@ -1341,11 +1512,15 @@ class SplitApp(QWidget):
 
         try:
             if src and sheet:
-                self.source_headers = read_excel_headers(Path(src), sheet, self.spin_header_rows.value())
+                self.source_headers = read_excel_headers(
+                    Path(src),
+                    sheet,
+                    self.spin_source_header_rows.value(),
+                )
             if template and Path(template).exists():
                 self.template_headers, self.template_col_start = read_template_headers(
                     Path(template),
-                    self.spin_header_rows.value(),
+                    self.spin_template_header_rows.value(),
                 )
             else:
                 self.template_headers = []
@@ -1404,6 +1579,7 @@ class SplitApp(QWidget):
         if f:
             self.edit_template.setText(f)
             self.log(f"Template: {f}")
+            self.detect_template_header(silent=True)
             self.refresh_template_mapping(auto=True)
             self.update_workflow_status()
 
@@ -1435,10 +1611,45 @@ class SplitApp(QWidget):
             self.cmb_sheet.addItems(sheets)
             if sheets:
                 self.cmb_sheet.setCurrentIndex(0)
+                self.detect_source_header(silent=True)
             self.log(f"Sheets loaded: {', '.join(sheets)}")
             self.update_workflow_status()
         except Exception as e:
             InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
+
+    def detect_source_header(self, silent=False):
+        src = self.edit_source.text().strip()
+        sheet = self.cmb_sheet.currentText().strip()
+        if not src or not sheet:
+            if not silent:
+                InfoBar.warning("Perhatian", "Pastikan source & sheet sudah dipilih.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return None
+        try:
+            row = detect_excel_header_row(Path(src), sheet)
+            self.spin_source_header_rows.setValue(row)
+            self.log(f"Source header row detected: {row}")
+            return row
+        except Exception as e:
+            if not silent:
+                InfoBar.error("Error", f"Gagal detect source header: {e}", parent=self, duration=5000, position=InfoBarPosition.TOP)
+            return None
+
+    def detect_template_header(self, silent=False):
+        template = self.edit_template.text().strip()
+        if not template:
+            if not silent:
+                InfoBar.warning("Perhatian", "Pilih template Excel dulu.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return None
+        try:
+            row = detect_excel_header_row(Path(template))
+            self.spin_template_header_rows.setValue(row)
+            self.log(f"Template header row detected: {row}")
+            self.refresh_template_mapping(auto=True)
+            return row
+        except Exception as e:
+            if not silent:
+                InfoBar.error("Error", f"Gagal detect template header: {e}", parent=self, duration=5000, position=InfoBarPosition.TOP)
+            return None
 
     def load_headers(self):
         src = self.edit_source.text().strip()
@@ -1447,7 +1658,7 @@ class SplitApp(QWidget):
             InfoBar.warning("Perhatian", "Pastikan source & sheet sudah dipilih.", parent=self, duration=3000, position=InfoBarPosition.TOP)
             return
         try:
-            header_row_idx = self.spin_header_rows.value() - 1
+            header_row_idx = self.spin_source_header_rows.value() - 1
             df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
             headers = list(df.columns.astype(str))
             self.source_headers = headers
@@ -1460,6 +1671,7 @@ class SplitApp(QWidget):
             self.log(f"Headers loaded: {headers}")
             self.refresh_template_mapping(auto=True)
             self.update_workflow_status()
+            self.update_filename_preview()
         except Exception as e:
             InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
@@ -1499,8 +1711,14 @@ class SplitApp(QWidget):
             out_dir = Path(self.edit_outdir.text().strip())
             sheet_name = self.cmb_sheet.currentText().strip()
             key_raw = self.cmb_key.currentText().strip()
-            header_rows = self.spin_header_rows.value()
-            pdf_engine = self.cmb_pdf_engine.currentText().strip().lower()
+            source_header_rows = self.spin_source_header_rows.value()
+            template_header_rows = self.spin_template_header_rows.value()
+            output_file_type = self.current_output_file_type()
+            pdf_engine = (
+                self.cmb_pdf_engine.currentText().strip().lower()
+                if output_file_type == OUTPUT_TYPE_PDF
+                else "none"
+            )
             template_mode = self.current_template_mode()
 
             if not source_path.exists():
@@ -1548,16 +1766,16 @@ class SplitApp(QWidget):
                     )
                     return
 
-            if pdf_engine == "xlwings":
+            if output_file_type == OUTPUT_TYPE_PDF and pdf_engine == "xlwings":
                 if not XLWINGS_AVAILABLE:
-                    InfoBar.warning("xlwings", "xlwings belum terpasang. Gunakan 'libreoffice' atau 'none'.", parent=self, duration=5000, position=InfoBarPosition.TOP)
+                    InfoBar.warning("xlwings", "xlwings belum terpasang. Gunakan LibreOffice atau output Excel.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                     return
                 elif not check_excel_availability():
                     InfoBar.warning("Excel", "Microsoft Excel tidak dapat diakses via COM.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                     return
 
             soffice_path = None
-            if pdf_engine == "libreoffice":
+            if output_file_type == OUTPUT_TYPE_PDF and pdf_engine == "libreoffice":
                 lo_explicit = self.edit_lo_path.text().strip()
                 soffice_path = find_soffice(lo_explicit)
                 if not soffice_path:
@@ -1578,7 +1796,10 @@ class SplitApp(QWidget):
                 'key_col': key_col,
                 'template_path': template_path,
                 'out_dir': out_dir,
-                'header_rows': header_rows,
+                'header_rows': source_header_rows,
+                'source_header_rows': source_header_rows,
+                'template_header_rows': template_header_rows,
+                'output_file_type': output_file_type,
                 'pdf_engine': pdf_engine,
                 'soffice_path': soffice_path,
                 'prefix': self.edit_prefix.text().strip(),
@@ -1602,8 +1823,10 @@ class SplitApp(QWidget):
         self.set_busy(False)
         self.log("Selesai.")
         self.btn_open_output.setVisible(True)
-        pdf_engine = self.cmb_pdf_engine.currentText().strip().lower()
-        if pdf_engine == "xlwings":
+        if (
+            self.current_output_file_type() == OUTPUT_TYPE_PDF
+            and self.cmb_pdf_engine.currentText().strip().lower() == "xlwings"
+        ):
             cleanup_excel_com()
         InfoBar.success("Selesai", "Proses selesai.", parent=self, duration=5000, position=InfoBarPosition.TOP)
 

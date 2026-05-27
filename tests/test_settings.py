@@ -39,10 +39,13 @@ class SettingsTests(unittest.TestCase):
             first.edit_outdir.setText("out")
             first.edit_prefix.setText("PRE")
             first.edit_suffix.setText("SUF")
+            first.spin_source_header_rows.setValue(2)
+            first.spin_template_header_rows.setValue(3)
+            first.cmb_output_type.setCurrentIndex(first.cmb_output_type.findText("PDF"))
             first.cmb_template_mode.setCurrentIndex(
                 first.cmb_template_mode.findText("Use Source as Template")
             )
-            first.cmb_pdf_engine.setCurrentIndex(first.cmb_pdf_engine.findText("none"))
+            first.cmb_pdf_engine.setCurrentIndex(first.cmb_pdf_engine.findText("libreoffice"))
             first.source_headers = ["Name"]
             first.template_headers = ["Worker"]
             first.render_mapping_rows({"Worker": "Name"})
@@ -55,8 +58,11 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(second.edit_outdir.text(), "out")
             self.assertEqual(second.edit_prefix.text(), "PRE")
             self.assertEqual(second.edit_suffix.text(), "SUF")
+            self.assertEqual(second.spin_source_header_rows.value(), 2)
+            self.assertEqual(second.spin_template_header_rows.value(), 3)
+            self.assertEqual(second.cmb_output_type.currentText(), "PDF")
             self.assertEqual(second.cmb_template_mode.currentText(), "Use Source as Template")
-            self.assertEqual(second.cmb_pdf_engine.currentText(), "none")
+            self.assertEqual(second.cmb_pdf_engine.currentText(), "libreoffice")
             self.assertEqual(second.saved_column_mapping, {"Worker": "Name"})
 
     def test_ini_toolbar_buttons_are_replaced_by_reset_settings(self):

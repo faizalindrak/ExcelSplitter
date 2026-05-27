@@ -128,6 +128,9 @@ class UISmokeTests(unittest.TestCase):
             window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
             self.addCleanup(window.deleteLater)
 
+            window.cmb_output_type.setCurrentIndex(window.cmb_output_type.findText("PDF"))
+            window.on_output_type_changed()
+
             self.assertTrue(hasattr(window, "lo_path_row_widget"))
             self.assertTrue(window.lo_path_row_widget.isHidden())
 
@@ -135,6 +138,38 @@ class UISmokeTests(unittest.TestCase):
             window.on_pdf_engine_changed()
 
             self.assertFalse(window.lo_path_row_widget.isHidden())
+
+    def test_header_rows_are_independent_and_output_type_controls_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "spin_source_header_rows"))
+            self.assertTrue(hasattr(window, "spin_template_header_rows"))
+            self.assertTrue(hasattr(window, "btn_detect_source_header"))
+            self.assertTrue(hasattr(window, "btn_detect_template_header"))
+            self.assertTrue(hasattr(window, "cmb_output_type"))
+            self.assertTrue(hasattr(window, "lbl_filename_preview"))
+
+            output_types = [
+                window.cmb_output_type.itemText(index)
+                for index in range(window.cmb_output_type.count())
+            ]
+            self.assertEqual(output_types, ["Excel", "PDF"])
+            self.assertEqual(window.cmb_output_type.currentText(), "Excel")
+            self.assertTrue(window.cmb_pdf_engine.isHidden())
+
+            window.cmb_key.clear()
+            window.cmb_key.addItem("Dept")
+            window.edit_prefix.setText("PRE")
+            window.edit_suffix.setText("SUF")
+            window.update_filename_preview()
+            self.assertIn("PRE <Dept value> SUF.xlsx", window.lbl_filename_preview.text())
+
+            window.cmb_output_type.setCurrentIndex(window.cmb_output_type.findText("PDF"))
+            window.on_output_type_changed()
+            self.assertFalse(window.cmb_pdf_engine.isHidden())
+            self.assertIn("PRE <Dept value> SUF.pdf", window.lbl_filename_preview.text())
 
     def test_footer_progress_is_hidden_until_generation_starts(self):
         with tempfile.TemporaryDirectory() as tmp:

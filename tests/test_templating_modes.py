@@ -31,6 +31,20 @@ class HeaderMappingTests(unittest.TestCase):
 
         self.assertEqual(missing, ["Dept"])
 
+    def test_detect_excel_header_row_prefers_row_with_header_like_cells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Monthly report", None, None])
+            ws.append([None, None, None])
+            ws.append(["Name", "Dept", "Amount"])
+            ws.append(["Alice", "A", 10])
+            wb.save(path)
+
+            self.assertEqual(main.detect_excel_header_row(path, "Data"), 3)
+
 
 class TemplateFileSplitTests(unittest.TestCase):
     def make_source_workbook(self, path: Path):
@@ -79,6 +93,55 @@ class TemplateFileSplitTests(unittest.TestCase):
             self.assertEqual(ws["B2"].value, "A")
             self.assertEqual(ws["A3"].value, "Ana")
             self.assertEqual(ws["B3"].value, "A")
+
+    def test_template_file_mode_supports_separate_source_and_template_header_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Report export", None, None])
+            ws.append(["Name", "Dept", "Amount"])
+            ws.append(["Alice", "A", 10])
+            ws.append(["Bob", "B", 20])
+            ws.append(["Ana", "A", 30])
+            wb.save(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws.append(["Company report", None])
+            ws.append([None, None])
+            ws.append(["Worker", "Team"])
+            wb.save(template)
+
+            main.split_excel_with_template(
+                source,
+                "Data",
+                "Dept",
+                template,
+                out_dir,
+                1,
+                pdf_engine="none",
+                template_mode="template_file",
+                column_mapping={"Worker": "Name", "Team": "Dept"},
+                source_header_rows=2,
+                template_header_rows=3,
+            )
+
+            wb = load_workbook(out_dir / "A.xlsx", data_only=True)
+            ws = wb.active
+            self.assertEqual(ws["A1"].value, "Company report")
+            self.assertEqual(ws["A3"].value, "Worker")
+            self.assertEqual(ws["B3"].value, "Team")
+            self.assertEqual(ws["A4"].value, "Alice")
+            self.assertEqual(ws["B4"].value, "A")
+            self.assertEqual(ws["A5"].value, "Ana")
+            self.assertEqual(ws["B5"].value, "A")
 
     def test_template_file_mode_requires_complete_manual_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:
