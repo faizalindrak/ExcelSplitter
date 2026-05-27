@@ -154,6 +154,90 @@ class MailMergeCoreTests(unittest.TestCase):
             self.assertIn("Rendered subject is empty for key A", jobs[0].validation_errors)
             self.assertIn("Rendered body is empty for key A", jobs[0].validation_errors)
 
+    def test_fake_provider_records_sent_jobs(self):
+        provider = mail_merge.FakeMailProvider()
+        job = mail_merge.EmailJob(
+            key="A",
+            to=["a@example.com"],
+            cc=[],
+            bcc=[],
+            subject="Subject",
+            body="Body",
+            is_html=False,
+            attachments=[],
+        )
+
+        result = provider.send(job, mail_merge.SendTimingOptions())
+
+        self.assertEqual(result.status, "sent")
+        self.assertEqual(provider.sent_jobs, [job])
+
+    def test_outlook_provider_sets_recipients_attachments_and_deferred_delivery(self):
+        calls = []
+
+        class FakeAttachments:
+            def Add(self, path):
+                calls.append(("attach", path))
+
+        class FakeRecipients:
+            def Add(self, value):
+                calls.append(("recipient", value))
+                recipient = type("Recipient", (), {})()
+                recipient.Type = None
+                return recipient
+
+        class FakeMessage:
+            def __init__(self):
+                self.To = ""
+                self.CC = ""
+                self.BCC = ""
+                self.Subject = ""
+                self.Body = ""
+                self.HTMLBody = ""
+                self.DeferredDeliveryTime = None
+                self.Attachments = FakeAttachments()
+                self.Recipients = FakeRecipients()
+
+            def Send(self):
+                calls.append(("send", self.Subject, self.DeferredDeliveryTime))
+
+        class FakeOutlook:
+            def CreateItem(self, item_type):
+                calls.append(("create", item_type))
+                return FakeMessage()
+
+        now = datetime(2026, 5, 27, 15, 0, 0)
+        provider = mail_merge.OutlookMailProvider(
+            dispatcher=lambda name: FakeOutlook(),
+            now_fn=lambda: now,
+        )
+        attachment = Path("C:/tmp/A.pdf")
+        job = mail_merge.EmailJob(
+            key="A",
+            to=["a@example.com"],
+            cc=["c@example.com"],
+            bcc=["b@example.com"],
+            subject="Subject A",
+            body="<p>Body</p>",
+            is_html=True,
+            attachments=[attachment],
+        )
+
+        result = provider.send(
+            job,
+            mail_merge.SendTimingOptions(
+                delay_delivery_enabled=True,
+                delay_delivery_minutes=5,
+                throttle_enabled=False,
+                throttle_seconds=0,
+            ),
+        )
+
+        self.assertEqual(result.status, "sent")
+        self.assertIn(("create", 0), calls)
+        self.assertIn(("attach", str(attachment)), calls)
+        self.assertIn(("send", "Subject A", now + mail_merge.timedelta(minutes=5)), calls)
+
 
 if __name__ == "__main__":
     unittest.main()

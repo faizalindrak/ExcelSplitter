@@ -245,3 +245,46 @@ def build_email_jobs(
 
 def all_jobs_valid(jobs: list[EmailJob]) -> bool:
     return all(job.is_valid for job in jobs)
+
+
+class FakeMailProvider:
+    def __init__(self):
+        self.sent_jobs: list[EmailJob] = []
+
+    def send(self, job: EmailJob, timing: SendTimingOptions) -> SendResult:
+        self.sent_jobs.append(job)
+        return SendResult(key=job.key, to=job.to, status="sent", message="fake")
+
+
+class OutlookMailProvider:
+    def __init__(
+        self,
+        dispatcher: Callable[[str], object] | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ):
+        self.dispatcher = dispatcher
+        self.now_fn = now_fn or datetime.now
+
+    def _dispatch(self):
+        if self.dispatcher is not None:
+            return self.dispatcher("Outlook.Application")
+        import win32com.client
+        return win32com.client.Dispatch("Outlook.Application")
+
+    def send(self, job: EmailJob, timing: SendTimingOptions) -> SendResult:
+        outlook = self._dispatch()
+        message = outlook.CreateItem(0)
+        message.To = "; ".join(job.to)
+        message.CC = "; ".join(job.cc)
+        message.BCC = "; ".join(job.bcc)
+        message.Subject = job.subject
+        if job.is_html:
+            message.HTMLBody = job.body
+        else:
+            message.Body = job.body
+        for attachment in job.attachments:
+            message.Attachments.Add(str(attachment))
+        if timing.delay_delivery_enabled and timing.delay_delivery_minutes > 0:
+            message.DeferredDeliveryTime = self.now_fn() + timedelta(minutes=timing.delay_delivery_minutes)
+        message.Send()
+        return SendResult(key=job.key, to=job.to, status="sent", message="outlook")
