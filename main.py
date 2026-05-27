@@ -28,6 +28,9 @@ from qfluentwidgets import (
     setTheme, Theme, FluentIcon as FIF
 )
 
+CHEVRON_DOWN_ICON = getattr(FIF, "CHEVRON_DOWN", None) or FIF.CHEVRON_DOWN_MED
+CHEVRON_RIGHT_ICON = getattr(FIF, "CHEVRON_RIGHT", None) or FIF.CHEVRON_RIGHT_MED
+
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
     import xlwings as xw
@@ -692,7 +695,7 @@ class AccordionCard(SimpleCardWidget):
         header_layout.addWidget(self._title_label)
         header_layout.addStretch()
 
-        self._toggle_btn = ToolButton(FIF.CHEVRON_DOWN)
+        self._toggle_btn = ToolButton(CHEVRON_DOWN_ICON)
         self._toggle_btn.setFixedSize(20, 20)
         self._toggle_btn.clicked.connect(self.toggle)
         header_layout.addWidget(self._toggle_btn)
@@ -714,17 +717,17 @@ class AccordionCard(SimpleCardWidget):
     def toggle(self):
         self._expanded = not self._expanded
         self._content.setVisible(self._expanded)
-        self._toggle_btn.setIcon(FIF.CHEVRON_DOWN if self._expanded else FIF.CHEVRON_RIGHT)
+        self._toggle_btn.setIcon(CHEVRON_DOWN_ICON if self._expanded else CHEVRON_RIGHT_ICON)
 
     def collapse(self):
         self._expanded = False
         self._content.setVisible(False)
-        self._toggle_btn.setIcon(FIF.CHEVRON_RIGHT)
+        self._toggle_btn.setIcon(CHEVRON_RIGHT_ICON)
 
     def expand(self):
         self._expanded = True
         self._content.setVisible(True)
-        self._toggle_btn.setIcon(FIF.CHEVRON_DOWN)
+        self._toggle_btn.setIcon(CHEVRON_DOWN_ICON)
 class SplitApp(QWidget):
     def __init__(self):
         super().__init__()

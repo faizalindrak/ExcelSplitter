@@ -26,10 +26,15 @@ goto USE_UV
 :USE_PIP
 echo [INFO] Menggunakan pip
 "%PY_EXE%" -m pip install --upgrade pip setuptools wheel || echo [WARN] Gagal upgrade pip
-echo [INFO] Install dependencies (pip)
-"%PIP_EXE%" install --upgrade pyinstaller customtkinter pandas openpyxl reportlab xlwings pywin32 || goto FAIL
+if exist requirements.txt (
+  echo [INFO] Install dependencies dari requirements.txt via pip
+  "%PIP_EXE%" install --upgrade -r requirements.txt || goto FAIL
+) else (
+  echo [INFO] Install dependencies via pip
+  "%PIP_EXE%" install --upgrade pyinstaller PySide6 "PySide6-Fluent-Widgets[full]" pandas openpyxl xlwings pywin32 || goto FAIL
+)
 
-echo [INFO] Build exe (pip)
+echo [INFO] Build exe via pip
 if exist "main.spec" (
   "%PY_EXE%" -m pyinstaller main.spec --clean || goto FAIL
 ) else (
@@ -46,11 +51,11 @@ uv venv "%VENV%" || goto FAIL
 :UV_HAVE_VENV
 
 if exist requirements.txt (
-  echo [INFO] Sync dependencies dari requirements.txt (uv)
-  uv pip sync requirements.txt || goto FAIL
+  echo [INFO] Install dependencies dari requirements.txt via uv
+  uv pip install --upgrade -r requirements.txt || goto FAIL
 ) else (
-  echo [INFO] Install dependencies (uv)
-  uv pip install pyinstaller customtkinter pandas openpyxl reportlab xlwings pywin32 || goto FAIL
+  echo [INFO] Install dependencies via uv
+  uv pip install pyinstaller PySide6 "PySide6-Fluent-Widgets[full]" pandas openpyxl xlwings pywin32 || goto FAIL
 )
 
 echo [INFO] Build exe via uv run
@@ -62,7 +67,7 @@ if exist "main.spec" (
 goto SUCCESS
 
 :SUCCESS
-set OUT_EXE=dist\%PROJECT_NAME%\%PROJECT_NAME%.exe
+set OUT_EXE=dist\%PROJECT_NAME%.exe
 if exist "%OUT_EXE%" (
   echo [OK ] Build sukses: %OUT_EXE%
 ) else (
@@ -75,7 +80,7 @@ echo [ERR] Python tidak ditemukan di PATH. Install Python 3.10+ dan centang Add 
 exit /b 1
 
 :NO_UV
-echo [ERR] uv tidak ditemukan. Install uv (PowerShell):
+echo [ERR] uv tidak ditemukan. Install uv via PowerShell:
 echo iwr -useb https://astral.sh/uv/install.ps1 ^| iex
 exit /b 1
 

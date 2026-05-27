@@ -1,14 +1,14 @@
 # main.spec
 # Build: pyinstaller main.spec
-# Hasil: dist/ExcelSplitter/ExcelSplitter.exe  (one-file)
+# Hasil: dist/ExcelSplitter.exe  (one-file)
 # Catatan:
 # - console=False => tidak munculkan jendela console
-# - Mengumpulkan data/hiddenimports untuk reportlab, openpyxl, pandas, customtkinter
+# - Mengumpulkan data/hiddenimports untuk openpyxl, pandas, PySide6, qfluentwidgets
 # - Termasuk pywin32 dan xlwings untuk Excel COM automation
 # - Jika ingin icon, set ICON_PATH di bawah.
 #
 # Dependencies yang dibutuhkan:
-# pip install pandas openpyxl customtkinter reportlab xlwings pywin32
+# pip install -r requirements.txt
 
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 from PyInstaller.building.build_main import Analysis, PYZ, EXE
@@ -28,10 +28,6 @@ datas  = []
 binaries = []
 hiddenimports = []
 
-# reportlab (PDF pure-Python)
-datas += collect_data_files("reportlab", include_py_files=False)
-hiddenimports += collect_submodules("reportlab")
-
 # openpyxl (baca & tulis xlsx)
 datas += collect_data_files("openpyxl", include_py_files=False)
 hiddenimports += collect_submodules("openpyxl")
@@ -39,9 +35,14 @@ hiddenimports += collect_submodules("openpyxl")
 # pandas (IO excel & grouping)
 hiddenimports += collect_submodules("pandas")
 
-# customtkinter (tema/gambar jika ada)
-datas += collect_data_files("customtkinter", include_py_files=False)
-hiddenimports += collect_submodules("customtkinter")
+# PySide6 / Fluent Widgets UI
+hiddenimports += [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+]
+datas += collect_data_files("qfluentwidgets", include_py_files=False)
+hiddenimports += collect_submodules("qfluentwidgets")
 
 # xlwings (Excel COM automation)
 try:
@@ -63,7 +64,6 @@ try:
     hiddenimports += [
         "win32com.client",
         "win32com.client.gencache",
-        "win32com.gen_py",
         "pythoncom",
         "pywintypes",
         "win32timezone"
@@ -85,8 +85,6 @@ except:
 
 # Tambahan imports untuk Excel COM yang sering missing
 hiddenimports += [
-    "pkg_resources.py2_warn",
-    "pkg_resources.markers",
     "email.mime.multipart",
     "email.mime.text",
     "email.mime.base",
@@ -95,8 +93,7 @@ hiddenimports += [
     "encodings.cp1252"
 ]
 
-# tkinter assets (umumnya sudah di-bundle otomatis oleh PyInstaller)
-# Tidak perlu tambahan khusus, tapi tetap aman bila runtime berbeda.
+# Qt assets umumnya sudah di-bundle otomatis oleh PyInstaller hooks.
 
 block_cipher = None
 

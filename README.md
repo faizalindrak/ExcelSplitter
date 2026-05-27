@@ -54,7 +54,7 @@ python main.py
 
 # Create virtual environment and install dependencies
 uv venv .venv
-uv pip sync requirements.txt
+uv pip install --upgrade -r requirements.txt
 
 # Run the application
 uv run python main.py
@@ -93,7 +93,7 @@ build-uv.bat
    ```
 
 3. **Find the executable**:
-   - The built application will be in `dist/ExcelSplitter/ExcelSplitter.exe`
+   - The built application will be in `dist/ExcelSplitter.exe`
    - Copy this file to your desired location for distribution
 
 ### Build Configuration
@@ -118,7 +118,7 @@ The `main.spec` file contains build configuration:
 8. **Choose Output Folder**: Select where to save split files
 9. **Configure Options**:
    - Header rows count (default: 5)
-   - PDF engine (reportlab, libreoffice, or none)
+   - PDF engine (xlwings, libreoffice, or none)
    - LibreOffice path (if using libreoffice PDF engine)
 10. **Generate**: Click "Generate" to start the splitting process
 
@@ -143,10 +143,10 @@ For each unique value in the key column, the application creates:
 
 ### PDF Export Options
 
-#### ReportLab (Pure Python)
-- **Pros**: No external dependencies, fast
-- **Cons**: Limited formatting support
-- **Installation**: `pip install reportlab`
+#### xlwings (Microsoft Excel)
+- **Pros**: Uses Excel's native PDF export and preserves workbook formatting
+- **Cons**: Requires Microsoft Excel and COM automation access
+- **Installation**: `pip install xlwings`
 
 #### LibreOffice
 - **Pros**: Better formatting preservation, supports complex layouts
@@ -186,14 +186,15 @@ For each unique value in the key column, the application creates:
 
 ### Common Issues
 
-#### "ReportLab not available"
-- Install ReportLab: `pip install reportlab`
+#### "Microsoft Excel tidak dapat diakses via COM"
+- Install Microsoft Excel and ensure it can run normally
+- Install xlwings: `pip install xlwings`
 - Or switch to "libreoffice" or "none" PDF engine
 
 #### "LibreOffice not found"
 - Install LibreOffice from [libreoffice.org](https://www.libreoffice.org/)
 - Or manually browse to `soffice.exe` location
-- Or switch to "reportlab" PDF engine
+- Or switch to "xlwings" or "none" PDF engine
 
 #### "Permission denied" errors
 - Close any open Excel files
@@ -220,10 +221,11 @@ Enable detailed logging by checking the status text area during processing. The 
 ## 📋 Requirements
 
 ### Core Dependencies
-- `customtkinter>=5.2.2` - Modern GUI framework
+- `PySide6>=6.5.0` - Qt GUI framework
+- `PySide6-Fluent-Widgets>=1.5.3` - Fluent-style widget toolkit
 - `pandas>=2.3.2` - Data manipulation
 - `openpyxl>=3.1.5` - Excel file handling
-- `reportlab>=4.4.4` - PDF generation (optional)
+- `xlwings>=0.33.6` - Microsoft Excel PDF export (optional)
 
 ### Build Dependencies
 - `pyinstaller>=6.16.0` - Application packaging
@@ -248,9 +250,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- Built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
+- Built with [PySide6](https://doc.qt.io/qtforpython-6/) and [PySide6-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets)
 - Powered by [Pandas](https://pandas.pydata.org/) and [OpenPyXL](https://openpyxl.readthedocs.io/)
-- PDF functionality via [ReportLab](https://www.reportlab.com/) and LibreOffice
+- PDF functionality via [xlwings](https://www.xlwings.org/) and LibreOffice
 
 ## 📞 Support
 

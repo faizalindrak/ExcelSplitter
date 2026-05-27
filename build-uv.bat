@@ -13,17 +13,17 @@ if errorlevel 1 (
 
 REM 2) Buat venv (kalau belum)
 if not exist ".venv\Scripts\python.exe" (
-  echo [INFO] Membuat venv (.venv) via uv ...
-  uv venv .venv
+  echo [INFO] Membuat venv .venv via uv ...
+  uv venv .venv || exit /b 1
 )
 
 REM 3) Install dependencies ke venv (pakai uv, bukan pip)
 if exist requirements.txt (
-  echo [INFO] Sync deps dari requirements.txt ...
-  uv pip sync requirements.txt
+  echo [INFO] Install deps dari requirements.txt ...
+  uv pip install --upgrade -r requirements.txt || exit /b 1
 ) else (
   echo [INFO] Install deps langsung ...
-  uv pip install pyinstaller customtkinter pandas openpyxl reportlab
+  uv pip install pyinstaller PySide6 "PySide6-Fluent-Widgets[full]" pandas openpyxl xlwings pywin32 || exit /b 1
 )
 
 REM 4) Build pakai pyinstaller (via uv run agar pakai .venv)
@@ -35,4 +35,4 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [OK ] Selesai. Cek: dist\%PROJECT_NAME%\%PROJECT_NAME%.exe
+echo [OK ] Selesai. Cek: dist\%PROJECT_NAME%.exe
