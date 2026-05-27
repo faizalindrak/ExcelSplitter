@@ -114,13 +114,16 @@ The `main.spec` file contains build configuration:
 4. **Select Sheet**: Choose the worksheet containing your data
 5. **Load Headers**: Click "Load Headers" to see column options
 6. **Select Key Column**: Choose the column to split by (by name or index)
-7. **Select Template**: Choose a template Excel file for formatting
-8. **Choose Output Folder**: Select where to save split files
-9. **Configure Options**:
+7. **Choose Template Option**:
+   - **Use Template File**: choose a separate template workbook and map template columns to source columns
+   - **Use Source as Template**: split the selected source worksheet directly and keep its layout
+8. **Review Column Mapping**: Click "Auto Map" and manually map any required template columns that were not detected
+9. **Choose Output Folder**: Select where to save split files
+10. **Configure Options**:
    - Header rows count (default: 5)
    - PDF engine (xlwings, libreoffice, or none)
    - LibreOffice path (if using libreoffice PDF engine)
-10. **Generate**: Click "Generate" to start the splitting process
+11. **Generate**: Click "Generate" to start the splitting process
 
 ### Input Files
 
@@ -130,16 +133,24 @@ The `main.spec` file contains build configuration:
 - Should have a column with unique values for splitting
 
 #### Template Excel File
-- Used for formatting the output files
+- Used for formatting output files when using **Use Template File**
 - Should be a .xlsx file with desired styling
 - Header rows will be preserved in output files
-- Column order can be customized by template structure
+- Column order comes from the template header row
+- The template header row must contain column names so mapping can be completed
+- If template headers do not match source headers, complete the Column Mapping card before generating
+
+#### Source as Template
+- Uses the selected source worksheet as the output template
+- Outputs one workbook per key containing only that worksheet
+- Preserves worksheet layout and styles as much as openpyxl supports
+- Does not require a separate template file or column mapping
 
 ### Output Files
 
 For each unique value in the key column, the application creates:
-- **Excel file**: `SCHEDULE {key_value}.xlsx`
-- **PDF file** (optional): `SCHEDULE {key_value}.pdf`
+- **Excel file**: `{prefix} {key_value} {suffix}.xlsx`
+- **PDF file** (optional): `{prefix} {key_value} {suffix}.pdf`
 
 ### PDF Export Options
 
@@ -156,14 +167,10 @@ For each unique value in the key column, the application creates:
 
 ## ⚙️ Configuration
 
-### Saving Settings
-- Click "Save .ini" to save current configuration
-- Settings include all file paths, options, and preferences
-- Useful for repeated use with similar files
-
-### Loading Settings
-- Click "Load .ini" to restore previous configuration
-- Quickly resume work with saved settings
+### Automatic Settings
+- The app saves paths, template option, sheet/key selections, PDF options, filename prefix/suffix, and column mapping automatically with Qt QSettings
+- Settings are restored on startup
+- Use "Reset Settings" to clear saved settings and return to defaults
 
 ## 🔧 Advanced Features
 

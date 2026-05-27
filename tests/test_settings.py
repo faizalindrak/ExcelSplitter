@@ -1,0 +1,73 @@
+import os
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+import tempfile
+import unittest
+
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if os.name == "nt" and os.path.isdir(r"C:\Windows\Fonts"):
+    os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
+
+try:
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    with redirect_stdout(StringIO()):
+        import main
+except ModuleNotFoundError as exc:
+    raise unittest.SkipTest(f"GUI dependencies are not installed: {exc.name}")
+
+
+class SettingsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_settings(self, path: Path):
+        settings = QSettings(str(path), QSettings.IniFormat)
+        settings.clear()
+        return settings
+
+    def test_split_app_persists_fields_with_qsettings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.ini"
+            first = main.SplitApp(settings=self.make_settings(settings_path))
+            self.addCleanup(first.deleteLater)
+
+            first.edit_source.setText("source.xlsx")
+            first.edit_outdir.setText("out")
+            first.edit_prefix.setText("PRE")
+            first.edit_suffix.setText("SUF")
+            first.cmb_template_mode.setCurrentIndex(
+                first.cmb_template_mode.findText("Use Source as Template")
+            )
+            first.cmb_pdf_engine.setCurrentIndex(first.cmb_pdf_engine.findText("none"))
+            first.source_headers = ["Name"]
+            first.template_headers = ["Worker"]
+            first.render_mapping_rows({"Worker": "Name"})
+            first.save_settings()
+
+            second = main.SplitApp(settings=QSettings(str(settings_path), QSettings.IniFormat))
+            self.addCleanup(second.deleteLater)
+
+            self.assertEqual(second.edit_source.text(), "source.xlsx")
+            self.assertEqual(second.edit_outdir.text(), "out")
+            self.assertEqual(second.edit_prefix.text(), "PRE")
+            self.assertEqual(second.edit_suffix.text(), "SUF")
+            self.assertEqual(second.cmb_template_mode.currentText(), "Use Source as Template")
+            self.assertEqual(second.cmb_pdf_engine.currentText(), "none")
+            self.assertEqual(second.saved_column_mapping, {"Worker": "Name"})
+
+    def test_ini_toolbar_buttons_are_replaced_by_reset_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertFalse(hasattr(window, "btn_save_ini"))
+            self.assertFalse(hasattr(window, "btn_load_ini"))
+            self.assertTrue(hasattr(window, "btn_reset_settings"))
+
+
+if __name__ == "__main__":
+    unittest.main()

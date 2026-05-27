@@ -8,14 +8,14 @@ import re
 import shutil
 import subprocess
 import sys
+import json
 from pathlib import Path
-import configparser
 
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QSettings
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog
@@ -30,6 +30,13 @@ from qfluentwidgets import (
 
 CHEVRON_DOWN_ICON = getattr(FIF, "CHEVRON_DOWN", None) or FIF.CHEVRON_DOWN_MED
 CHEVRON_RIGHT_ICON = getattr(FIF, "CHEVRON_RIGHT", None) or FIF.CHEVRON_RIGHT_MED
+TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
+TEMPLATE_MODE_SOURCE_TEMPLATE = "source_template"
+TEMPLATE_MODE_LABELS = {
+    TEMPLATE_MODE_TEMPLATE_FILE: "Use Template File",
+    TEMPLATE_MODE_SOURCE_TEMPLATE: "Use Source as Template",
+}
+TEMPLATE_MODE_BY_LABEL = {label: key for key, label in TEMPLATE_MODE_LABELS.items()}
 
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
@@ -50,6 +57,54 @@ def set_print_titles_and_area(ws, header_rows: int, last_col_idx: int, last_data
     last_col_letter = get_column_letter(last_col_idx if last_col_idx > 0 else 1)
     last_row = last_data_row if last_data_row >= (header_rows + 1) else (header_rows + 1)
     ws.print_area = f"A1:{last_col_letter}{last_row}"
+
+def normalize_header(value) -> str:
+    value = "" if value is None else str(value)
+    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+
+def auto_map_columns(template_headers, source_headers):
+    source_by_key = {}
+    for source in source_headers:
+        key = normalize_header(source)
+        if key and key not in source_by_key:
+            source_by_key[key] = source
+
+    return {
+        template: source_by_key.get(normalize_header(template))
+        for template in template_headers
+    }
+
+def validate_column_mapping(template_headers, mapping):
+    mapping = mapping or {}
+    return [
+        template
+        for template in template_headers
+        if not mapping.get(template)
+    ]
+
+def read_excel_headers(path: Path, sheet_name: str, header_rows: int) -> list[str]:
+    df = pd.read_excel(path, sheet_name=sheet_name, header=header_rows - 1, nrows=0)
+    return [str(col) for col in df.columns]
+
+def read_template_headers(path: Path, header_rows: int) -> tuple[list[str], int]:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb.active
+        headers, col_idx, empty_streak = [], 1, 0
+        first_col = None
+        while col_idx <= 500 and empty_streak < 5:
+            value = ws.cell(row=header_rows, column=col_idx).value
+            if value is None or str(value).strip() == "":
+                empty_streak += 1
+            else:
+                if first_col is None:
+                    first_col = col_idx
+                headers.append(str(value).strip())
+                empty_streak = 0
+            col_idx += 1
+        return headers, first_col or 1
+    finally:
+        wb.close()
 
 def find_soffice(explicit_path: str | None = None) -> str | None:
     """Cari soffice.exe dari explicit, env, PATH, atau lokasi umum."""
@@ -359,14 +414,17 @@ def export_pdf_via_xlwings(xlsx_path: Path):
 def split_excel_with_template(
     source_path: Path, sheet_name: str, key_col, template_path: Path, out_dir: Path,
     header_rows: int, pdf_engine: str = "xlwings", soffice_path: str | None = None,
-    prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None
+    prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None,
+    template_mode: str = TEMPLATE_MODE_TEMPLATE_FILE, column_mapping: dict | None = None
 ):
     if status_cb is None: status_cb = lambda msg: None
     if progress_cb is None: progress_cb = lambda t, c: None
 
+    if template_mode not in {TEMPLATE_MODE_TEMPLATE_FILE, TEMPLATE_MODE_SOURCE_TEMPLATE}:
+        raise ValueError(f"Template mode tidak didukung: {template_mode}")
     if not source_path.exists():
         raise FileNotFoundError(f"Sumber tidak ditemukan: {source_path}")
-    if not template_path.exists():
+    if template_mode == TEMPLATE_MODE_TEMPLATE_FILE and not template_path.exists():
         raise FileNotFoundError(f"Template tidak ditemukan: {template_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -441,34 +499,29 @@ def split_excel_with_template(
             except Exception as conv_e:
                 status_cb(f"Debug: Failed to convert {col}: {conv_e}")
 
-    # Selaraskan urutan kolom ke header template jika cocok
+    # Selaraskan urutan kolom ke header template.
     templ_cols = None
     templ_col_start = 1
-    try:
-        wb_probe = load_workbook(template_path, read_only=True, data_only=True)
-        ws_probe = wb_probe.active
-        tmp, c, empty_streak = [], 1, 0
-        first_col_found = False
-        while c <= 500 and empty_streak < 5:
-            val = ws_probe.cell(row=header_rows, column=c).value
-            if val is None or str(val).strip() == "":
-                empty_streak += 1
-            else:
-                if not first_col_found:
-                    templ_col_start = c
-                    first_col_found = True
-                tmp.append(str(val).strip()); empty_streak = 0
-            c += 1
-        wb_probe.close()
-        if tmp:
-            templ_cols = tmp
-    except Exception:
-        templ_cols = None
+    if template_mode == TEMPLATE_MODE_TEMPLATE_FILE:
+        templ_cols, templ_col_start = read_template_headers(template_path, header_rows)
+        if not templ_cols:
+            raise ValueError("Header template tidak ditemukan untuk mapping kolom.")
 
-    if templ_cols:
-        exist = [col for col in templ_cols if col in df.columns]
-        if exist:
-            df = df[exist]
+        source_headers = [str(col) for col in df.columns]
+        effective_mapping = column_mapping or auto_map_columns(templ_cols, source_headers)
+        missing = validate_column_mapping(templ_cols, effective_mapping)
+        if missing:
+            raise ValueError("Mapping kolom template belum lengkap: " + ", ".join(missing))
+
+        mapped_data = {}
+        for template_col in templ_cols:
+            source_col = effective_mapping[template_col]
+            if source_col not in df.columns:
+                raise ValueError(
+                    f"Kolom sumber untuk template '{template_col}' tidak ditemukan: {source_col}"
+                )
+            mapped_data[template_col] = df[source_col]
+        df = pd.DataFrame(mapped_data, index=df.index)
 
     # Debug: Check groupby operation
     status_cb("Debug: Starting groupby operation...")
@@ -518,6 +571,44 @@ def split_excel_with_template(
         current += 1
         status_cb(f"Proses [{current}/{total}] key={key_val}")
         progress_cb(total, current)
+
+        if template_mode == TEMPLATE_MODE_SOURCE_TEMPLATE:
+            wb = load_workbook(source_path)
+            if sheet_name not in wb.sheetnames:
+                raise ValueError(f"Sheet sumber '{sheet_name}' tidak ditemukan.")
+
+            for sheet in list(wb.worksheets):
+                if sheet.title != sheet_name:
+                    wb.remove(sheet)
+
+            ws = wb[sheet_name]
+            start_row = header_rows + 1
+            keep_rows = {int(idx) + start_row for idx in group.index}
+            for row_idx in range(ws.max_row, start_row - 1, -1):
+                if row_idx not in keep_rows:
+                    ws.delete_rows(row_idx)
+
+            set_print_titles_and_area(ws, header_rows, ws.max_column, ws.max_row)
+
+            key_part = safe_file_part(key_val)
+            parts = []
+            if prefix:
+                parts.append(prefix)
+            parts.append(key_part)
+            if suffix:
+                parts.append(suffix)
+
+            out_name = " ".join(parts)
+            xlsx_out = out_dir / f"{out_name}.xlsx"
+            wb.save(xlsx_out)
+
+            eng = (pdf_engine or "none").lower()
+            if eng != "none":
+                if eng == "libreoffice":
+                    export_pdf_via_lo(xlsx_out, soffice_path=soffice_path)
+                elif eng == "xlwings":
+                    export_pdf_via_xlwings(xlsx_out)
+            continue
 
         # 1) Tulis XLSX dari template
         wb = load_workbook(template_path)
@@ -661,6 +752,8 @@ class SplitWorker(QThread):
                 soffice_path=self.params['soffice_path'],
                 prefix=self.params['prefix'],
                 suffix=self.params['suffix'],
+                template_mode=self.params.get('template_mode', TEMPLATE_MODE_TEMPLATE_FILE),
+                column_mapping=self.params.get('column_mapping'),
                 status_cb=self.status.emit,
                 progress_cb=lambda t, c: self.progress.emit(t, c)
             )
@@ -729,7 +822,7 @@ class AccordionCard(SimpleCardWidget):
         self._content.setVisible(True)
         self._toggle_btn.setIcon(CHEVRON_DOWN_ICON)
 class SplitApp(QWidget):
-    def __init__(self):
+    def __init__(self, settings=None):
         super().__init__()
         self.setWindowTitle("Excel Splitter")
         self.resize(1000, 750)
@@ -737,8 +830,17 @@ class SplitApp(QWidget):
 
         self.is_running = False
         self.worker = None
+        self.settings = settings or QSettings("Faizalindrak", "ExcelSplitter")
+        self.saved_column_mapping = {}
+        self._loading_settings = False
+        self.source_headers = []
+        self.template_headers = []
+        self.template_col_start = 1
+        self.mapping_combos = {}
 
         self._build_ui()
+        self.load_settings()
+        self._connect_settings_signals()
 
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
@@ -746,14 +848,9 @@ class SplitApp(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(16, 12, 16, 4)
-        self.btn_save_ini = PushButton(FIF.SAVE, "Save .ini")
-        self.btn_save_ini.clicked.connect(self.save_ini)
-        self.btn_load_ini = PushButton(FIF.FOLDER, "Load .ini")
-        self.btn_load_ini.clicked.connect(self.load_ini)
-        self.lbl_loaded_ini = CaptionLabel("")
-        toolbar.addWidget(self.btn_save_ini)
-        toolbar.addWidget(self.btn_load_ini)
-        toolbar.addWidget(self.lbl_loaded_ini)
+        self.btn_reset_settings = PushButton("Reset Settings")
+        self.btn_reset_settings.clicked.connect(self.reset_settings)
+        toolbar.addWidget(self.btn_reset_settings)
         toolbar.addStretch()
         root_layout.addLayout(toolbar)
 
@@ -769,6 +866,7 @@ class SplitApp(QWidget):
 
         self._build_source_card()
         self._build_template_card()
+        self._build_mapping_card()
         self._build_output_card()
         self._build_actions_card()
 
@@ -817,6 +915,20 @@ class SplitApp(QWidget):
         card = AccordionCard("Template", FIF.EDIT)
         layout = card.content_layout
 
+        mode_row = QHBoxLayout()
+        self.cmb_template_mode = ComboBox()
+        self.cmb_template_mode.addItems([
+            TEMPLATE_MODE_LABELS[TEMPLATE_MODE_TEMPLATE_FILE],
+            TEMPLATE_MODE_LABELS[TEMPLATE_MODE_SOURCE_TEMPLATE],
+        ])
+        self.cmb_template_mode.setCurrentIndex(0)
+        self.cmb_template_mode.setFixedWidth(220)
+        self.cmb_template_mode.currentTextChanged.connect(self.on_template_mode_changed)
+        mode_row.addWidget(BodyLabel("Template Option:"))
+        mode_row.addWidget(self.cmb_template_mode)
+        mode_row.addStretch()
+        layout.addLayout(mode_row)
+
         row1 = QHBoxLayout()
         self.edit_template = LineEdit()
         self.edit_template.setPlaceholderText("Path to template Excel file...")
@@ -837,6 +949,26 @@ class SplitApp(QWidget):
         layout.addLayout(row2)
 
         self.scroll_layout.addWidget(card)
+
+    def _build_mapping_card(self):
+        self.mapping_card = AccordionCard("Column Mapping", FIF.EDIT)
+        layout = self.mapping_card.content_layout
+
+        row = QHBoxLayout()
+        self.btn_auto_map = PushButton("Auto Map")
+        self.btn_auto_map.clicked.connect(lambda: self.refresh_template_mapping(auto=True))
+        row.addWidget(self.btn_auto_map)
+        row.addWidget(CaptionLabel("Required when template headers differ from source headers."))
+        row.addStretch()
+        layout.addLayout(row)
+
+        self.mapping_rows_widget = QWidget()
+        self.mapping_rows_layout = QVBoxLayout(self.mapping_rows_widget)
+        self.mapping_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.mapping_rows_layout.setSpacing(8)
+        layout.addWidget(self.mapping_rows_widget)
+
+        self.scroll_layout.addWidget(self.mapping_card)
 
     def _build_output_card(self):
         card = AccordionCard("Output", FIF.FOLDER)
@@ -931,10 +1063,208 @@ class SplitApp(QWidget):
         self.is_running = busy
         self.btn_generate.setEnabled(not busy)
         self.btn_generate.setText("Generating..." if busy else "Generate")
-        self.btn_save_ini.setEnabled(not busy)
-        self.btn_load_ini.setEnabled(not busy)
+        self.btn_reset_settings.setEnabled(not busy)
         if not busy:
             self.progress_bar.setValue(0)
+
+    def _connect_settings_signals(self):
+        for edit in [
+            self.edit_source,
+            self.edit_template,
+            self.edit_outdir,
+            self.edit_lo_path,
+            self.edit_prefix,
+            self.edit_suffix,
+        ]:
+            edit.editingFinished.connect(self.save_settings)
+
+        for combo in [self.cmb_sheet, self.cmb_key, self.cmb_template_mode, self.cmb_pdf_engine]:
+            combo.currentTextChanged.connect(self.save_settings)
+
+        self.spin_header_rows.valueChanged.connect(self.save_settings)
+
+    def save_settings(self):
+        if self._loading_settings:
+            return
+
+        mapping = self.collect_column_mapping() if self.mapping_combos else self.saved_column_mapping
+        self.saved_column_mapping = mapping
+
+        self.settings.setValue("source_path", self.edit_source.text().strip())
+        self.settings.setValue("sheet_name", self.cmb_sheet.currentText().strip())
+        self.settings.setValue("key_col", self.cmb_key.currentText().strip())
+        self.settings.setValue("template_mode", self.current_template_mode())
+        self.settings.setValue("template_path", self.edit_template.text().strip())
+        self.settings.setValue("header_rows", self.spin_header_rows.value())
+        self.settings.setValue("output_dir", self.edit_outdir.text().strip())
+        self.settings.setValue("pdf_engine", self.cmb_pdf_engine.currentText().strip().lower())
+        self.settings.setValue("libreoffice_path", self.edit_lo_path.text().strip())
+        self.settings.setValue("prefix", self.edit_prefix.text().strip())
+        self.settings.setValue("suffix", self.edit_suffix.text().strip())
+        self.settings.setValue("column_mapping", json.dumps(mapping))
+        self.settings.sync()
+
+    def load_settings(self):
+        self._loading_settings = True
+        try:
+            self.edit_source.setText(self.settings.value("source_path", ""))
+            self.edit_template.setText(self.settings.value("template_path", ""))
+            self.spin_header_rows.setValue(int(self.settings.value("header_rows", 5)))
+            self.edit_outdir.setText(self.settings.value("output_dir", ""))
+            self.edit_lo_path.setText(self.settings.value("libreoffice_path", ""))
+            self.edit_prefix.setText(self.settings.value("prefix", ""))
+            self.edit_suffix.setText(self.settings.value("suffix", ""))
+
+            sheet = self.settings.value("sheet_name", "")
+            if sheet:
+                self.cmb_sheet.clear()
+                self.cmb_sheet.addItem(sheet)
+                self.cmb_sheet.setCurrentIndex(0)
+
+            key = self.settings.value("key_col", "")
+            if key:
+                self.cmb_key.clear()
+                self.cmb_key.addItem(key)
+                self.cmb_key.setCurrentIndex(0)
+
+            mode = self.settings.value("template_mode", TEMPLATE_MODE_TEMPLATE_FILE)
+            mode_label = TEMPLATE_MODE_LABELS.get(mode, TEMPLATE_MODE_LABELS[TEMPLATE_MODE_TEMPLATE_FILE])
+            mode_idx = self.cmb_template_mode.findText(mode_label)
+            if mode_idx >= 0:
+                self.cmb_template_mode.setCurrentIndex(mode_idx)
+
+            pdf_engine = self.settings.value("pdf_engine", "xlwings")
+            pdf_idx = self.cmb_pdf_engine.findText(pdf_engine)
+            if pdf_idx >= 0:
+                self.cmb_pdf_engine.setCurrentIndex(pdf_idx)
+
+            mapping_raw = self.settings.value("column_mapping", "{}")
+            try:
+                mapping = json.loads(mapping_raw) if mapping_raw else {}
+                self.saved_column_mapping = mapping if isinstance(mapping, dict) else {}
+            except Exception:
+                self.saved_column_mapping = {}
+        finally:
+            self._loading_settings = False
+
+        self.on_template_mode_changed()
+
+    def reset_settings(self):
+        self.settings.clear()
+        self.settings.sync()
+        self._loading_settings = True
+        try:
+            self.edit_source.clear()
+            self.edit_template.clear()
+            self.edit_outdir.clear()
+            self.edit_lo_path.clear()
+            self.edit_prefix.clear()
+            self.edit_suffix.clear()
+            self.cmb_sheet.clear()
+            self.cmb_key.clear()
+            self.cmb_template_mode.setCurrentIndex(0)
+            self.cmb_pdf_engine.setCurrentIndex(0)
+            self.spin_header_rows.setValue(5)
+            self.source_headers = []
+            self.template_headers = []
+            self.saved_column_mapping = {}
+            self.render_mapping_rows({})
+        finally:
+            self._loading_settings = False
+        self.on_template_mode_changed()
+
+    def current_template_mode(self):
+        return TEMPLATE_MODE_BY_LABEL.get(
+            self.cmb_template_mode.currentText(),
+            TEMPLATE_MODE_TEMPLATE_FILE,
+        )
+
+    def on_template_mode_changed(self):
+        if not hasattr(self, "mapping_card"):
+            return
+        use_template_file = self.current_template_mode() == TEMPLATE_MODE_TEMPLATE_FILE
+        self.edit_template.setEnabled(use_template_file)
+        self.btn_browse_template.setEnabled(use_template_file)
+        self.mapping_card.setVisible(use_template_file)
+        if use_template_file:
+            self.refresh_template_mapping(auto=True)
+
+    def _clear_mapping_rows(self):
+        while self.mapping_rows_layout.count():
+            item = self.mapping_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.mapping_combos = {}
+
+    def render_mapping_rows(self, mapping=None):
+        self._clear_mapping_rows()
+        mapping = mapping or {}
+        if not self.template_headers:
+            self.mapping_rows_layout.addWidget(CaptionLabel("No template headers loaded."))
+            return
+
+        source_choices = [""] + self.source_headers
+        for template_header in self.template_headers:
+            row_widget = QWidget()
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(BodyLabel(template_header))
+            row.addWidget(BodyLabel("->"))
+            combo = ComboBox()
+            combo.addItems(source_choices)
+            selected = mapping.get(template_header)
+            if selected:
+                idx = combo.findText(selected)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.currentTextChanged.connect(self.save_settings)
+            row.addWidget(combo)
+            row.addStretch()
+            self.mapping_rows_layout.addWidget(row_widget)
+            self.mapping_combos[template_header] = combo
+
+    def collect_column_mapping(self):
+        return {
+            header: combo.currentText().strip()
+            for header, combo in self.mapping_combos.items()
+            if combo.currentText().strip()
+        }
+
+    def refresh_template_mapping(self, auto=True):
+        if self.current_template_mode() != TEMPLATE_MODE_TEMPLATE_FILE:
+            self.mapping_card.setVisible(False)
+            return
+
+        self.mapping_card.setVisible(True)
+        src = self.edit_source.text().strip()
+        sheet = self.cmb_sheet.currentText().strip()
+        template = self.edit_template.text().strip()
+
+        try:
+            if src and sheet:
+                self.source_headers = read_excel_headers(Path(src), sheet, self.spin_header_rows.value())
+            if template and Path(template).exists():
+                self.template_headers, self.template_col_start = read_template_headers(
+                    Path(template),
+                    self.spin_header_rows.value(),
+                )
+            else:
+                self.template_headers = []
+
+            if auto:
+                mapping = auto_map_columns(self.template_headers, self.source_headers)
+                for key, value in self.saved_column_mapping.items():
+                    if key in mapping and value in self.source_headers:
+                        mapping[key] = value
+            else:
+                mapping = self.collect_column_mapping()
+            self.saved_column_mapping = {k: v for k, v in mapping.items() if v}
+            self.render_mapping_rows(mapping)
+        except Exception as e:
+            self.log(f"Mapping error: {e}")
+            self.template_headers = []
+            self.render_mapping_rows({})
 
     def browse_source(self):
         f, _ = QFileDialog.getOpenFileName(
@@ -953,6 +1283,7 @@ class SplitApp(QWidget):
         if f:
             self.edit_template.setText(f)
             self.log(f"Template: {f}")
+            self.refresh_template_mapping(auto=True)
 
     def browse_outdir(self):
         d = QFileDialog.getExistingDirectory(self, "Pilih output folder")
@@ -995,6 +1326,7 @@ class SplitApp(QWidget):
             header_row_idx = self.spin_header_rows.value() - 1
             df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
             headers = list(df.columns.astype(str))
+            self.source_headers = headers
             index_vals = [str(i+1) for i in range(len(headers))]
             values = headers + index_vals
             self.cmb_key.clear()
@@ -1002,6 +1334,7 @@ class SplitApp(QWidget):
             if headers:
                 self.cmb_key.setCurrentIndex(0)
             self.log(f"Headers loaded: {headers}")
+            self.refresh_template_mapping(auto=True)
         except Exception as e:
             InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
@@ -1043,11 +1376,12 @@ class SplitApp(QWidget):
             key_raw = self.cmb_key.currentText().strip()
             header_rows = self.spin_header_rows.value()
             pdf_engine = self.cmb_pdf_engine.currentText().strip().lower()
+            template_mode = self.current_template_mode()
 
             if not source_path.exists():
                 InfoBar.error("Error", "Source Excel tidak ditemukan.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
-            if not template_path.exists():
+            if template_mode == TEMPLATE_MODE_TEMPLATE_FILE and not template_path.exists():
                 InfoBar.error("Error", "Template Excel tidak ditemukan.", parent=self, duration=5000, position=InfoBarPosition.TOP)
                 return
             if not self.edit_outdir.text().strip():
@@ -1064,6 +1398,30 @@ class SplitApp(QWidget):
                 key_col = int(key_raw)
             except ValueError:
                 key_col = key_raw
+
+            column_mapping = None
+            if template_mode == TEMPLATE_MODE_TEMPLATE_FILE:
+                self.refresh_template_mapping(auto=False)
+                if not self.template_headers:
+                    InfoBar.error(
+                        "Mapping",
+                        "Header template tidak ditemukan. Periksa Header Rows atau file template.",
+                        parent=self,
+                        duration=8000,
+                        position=InfoBarPosition.TOP,
+                    )
+                    return
+                column_mapping = self.collect_column_mapping()
+                missing = validate_column_mapping(self.template_headers, column_mapping)
+                if missing:
+                    InfoBar.error(
+                        "Mapping",
+                        "Lengkapi mapping kolom: " + ", ".join(missing),
+                        parent=self,
+                        duration=8000,
+                        position=InfoBarPosition.TOP,
+                    )
+                    return
 
             if pdf_engine == "xlwings":
                 if not XLWINGS_AVAILABLE:
@@ -1082,6 +1440,7 @@ class SplitApp(QWidget):
                     return
 
             self.set_busy(True)
+            self.save_settings()
             self.log("Mulai generate...")
 
             if pdf_engine == "xlwings":
@@ -1099,6 +1458,8 @@ class SplitApp(QWidget):
                 'soffice_path': soffice_path,
                 'prefix': self.edit_prefix.text().strip(),
                 'suffix': self.edit_suffix.text().strip(),
+                'template_mode': template_mode,
+                'column_mapping': column_mapping,
             }
 
             self.worker = SplitWorker(params)
@@ -1125,69 +1486,6 @@ class SplitApp(QWidget):
         self.set_busy(False)
         self.log(f"Error: {error_msg}")
         InfoBar.error("Error", error_msg, parent=self, duration=8000, position=InfoBarPosition.TOP)
-
-    def save_ini(self):
-        f, _ = QFileDialog.getSaveFileName(
-            self, "Simpan konfigurasi", "", "INI files (*.ini)"
-        )
-        if not f:
-            return
-        cfg = configparser.ConfigParser()
-        cfg["template"] = {
-            "template_path": self.edit_template.text().strip(),
-            "header_rows": str(self.spin_header_rows.value()),
-        }
-        cfg["source"] = {
-            "source_path": self.edit_source.text().strip(),
-            "sheet_name": self.cmb_sheet.currentText().strip(),
-            "key_col": self.cmb_key.currentText().strip()
-        }
-        cfg["output"] = {
-            "output_dir": self.edit_outdir.text().strip(),
-            "pdf_engine": self.cmb_pdf_engine.currentText().strip().lower(),
-            "libreoffice_path": self.edit_lo_path.text().strip(),
-            "prefix": self.edit_prefix.text().strip(),
-            "suffix": self.edit_suffix.text().strip()
-        }
-        with open(f, "w", encoding="utf-8") as fp:
-            cfg.write(fp)
-        self.log(f"Konfigurasi tersimpan: {f}")
-
-    def load_ini(self):
-        f, _ = QFileDialog.getOpenFileName(
-            self, "Muat konfigurasi", "", "INI files (*.ini)"
-        )
-        if not f:
-            return
-        cfg = configparser.ConfigParser()
-        cfg.read(f, encoding="utf-8")
-        try:
-            self.edit_template.setText(cfg.get("template", "template_path", fallback=""))
-            self.spin_header_rows.setValue(cfg.getint("template", "header_rows", fallback=5))
-            self.edit_source.setText(cfg.get("source", "source_path", fallback=""))
-            sheet = cfg.get("source", "sheet_name", fallback="")
-            if sheet:
-                self.cmb_sheet.clear()
-                self.cmb_sheet.addItem(sheet)
-                self.cmb_sheet.setCurrentIndex(0)
-            key = cfg.get("source", "key_col", fallback="")
-            if key:
-                self.cmb_key.clear()
-                self.cmb_key.addItem(key)
-                self.cmb_key.setCurrentIndex(0)
-            self.edit_outdir.setText(cfg.get("output", "output_dir", fallback=""))
-            pdf_eng = cfg.get("output", "pdf_engine", fallback="xlwings").lower()
-            idx = self.cmb_pdf_engine.findText(pdf_eng)
-            if idx >= 0:
-                self.cmb_pdf_engine.setCurrentIndex(idx)
-            self.edit_lo_path.setText(cfg.get("output", "libreoffice_path", fallback=""))
-            self.edit_prefix.setText(cfg.get("output", "prefix", fallback=""))
-            self.edit_suffix.setText(cfg.get("output", "suffix", fallback=""))
-            self.lbl_loaded_ini.setText(f"Loaded: {Path(f).name}")
-            self.log(f"Konfigurasi dimuat: {f}")
-        except Exception as e:
-            InfoBar.error("Error", f"Format .ini tidak valid: {e}", parent=self, duration=5000, position=InfoBarPosition.TOP)
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -26,6 +26,15 @@ class UISmokeTests(unittest.TestCase):
         self.addCleanup(window.deleteLater)
 
         self.assertEqual(window.windowTitle(), "Excel Splitter")
+        self.assertTrue(hasattr(window, "cmb_template_mode"))
+        self.assertTrue(hasattr(window, "mapping_card"))
+        self.assertTrue(hasattr(window, "btn_auto_map"))
+
+        modes = [
+            window.cmb_template_mode.itemText(index)
+            for index in range(window.cmb_template_mode.count())
+        ]
+        self.assertEqual(modes, ["Use Template File", "Use Source as Template"])
 
 
 if __name__ == "__main__":
