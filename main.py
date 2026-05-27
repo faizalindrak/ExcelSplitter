@@ -25,7 +25,7 @@ from qfluentwidgets import (
     LineEdit, ComboBox, PushButton, PrimaryPushButton,
     ProgressBar, SpinBox, TextEdit, InfoBar, InfoBarPosition,
     ToolButton, SubtitleLabel, BodyLabel, CaptionLabel,
-    setTheme, Theme, FluentIcon as FIF
+    isDarkTheme, qconfig, setTheme, Theme, FluentIcon as FIF
 )
 
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
@@ -40,10 +40,19 @@ SECONDARY_PATH_FIELD_WIDTH = 320
 COMBO_FIELD_WIDTH = 190
 SMALL_FIELD_WIDTH = 120
 NAME_FIELD_WIDTH = 160
-APP_BACKGROUND = "#f5f7fb"
-CARD_BACKGROUND = "#ffffff"
-BORDER_COLOR = "#d8dee8"
-TEXT_COLOR = "#111827"
+FIELD_CONTROL_HEIGHT = 40
+DASHBOARD_LIGHT_PALETTE = {
+    "root": "#f5f7fb",
+    "card": "#ffffff",
+    "border": "#d8dee8",
+    "text": "#111827",
+}
+DASHBOARD_DARK_PALETTE = {
+    "root": "#202020",
+    "card": "#2b2b2b",
+    "border": "#3f3f46",
+    "text": "#f5f5f5",
+}
 
 # ==== (Opsional) xlwings untuk PDF via Excel COM ====
 try:
@@ -775,8 +784,9 @@ class SplitApp(QWidget):
         self.setWindowTitle("Excel Splitter")
         self.setObjectName("appRoot")
         self.resize(1000, 750)
-        setTheme(Theme.LIGHT)
+        setTheme(Theme.AUTO)
         self._apply_dashboard_styles()
+        qconfig.themeChanged.connect(lambda *_: self._apply_dashboard_styles())
 
         self.is_running = False
         self.worker = None
@@ -788,39 +798,54 @@ class SplitApp(QWidget):
         self.template_col_start = 1
         self.mapping_combos = {}
         self.mapping_status_labels = {}
+        self.field_action_buttons = []
 
         self._build_ui()
         self.load_settings()
         self._connect_settings_signals()
 
     def _apply_dashboard_styles(self):
+        palette = DASHBOARD_DARK_PALETTE if isDarkTheme() else DASHBOARD_LIGHT_PALETTE
         self.setStyleSheet(f"""
             QWidget#appRoot {{
-                background-color: {APP_BACKGROUND};
-                color: {TEXT_COLOR};
+                background-color: {palette["root"]};
+                color: {palette["text"]};
             }}
             QWidget#footerBar {{
-                background-color: {APP_BACKGROUND};
-                border-top: 1px solid {BORDER_COLOR};
+                background-color: {palette["root"]};
+                border-top: 1px solid {palette["border"]};
+            }}
+            QScrollArea#mainScrollArea {{
+                background-color: {palette["root"]};
+                border: none;
             }}
             QWidget#mainPanelHost {{
-                background-color: transparent;
+                background-color: {palette["root"]};
             }}
             SimpleCardWidget#dashboardPanel,
             SimpleCardWidget#workflowRail {{
-                background-color: {CARD_BACKGROUND};
-                border: 1px solid {BORDER_COLOR};
+                background-color: {palette["card"]};
+                border: 1px solid {palette["border"]};
                 border-radius: 8px;
             }}
             QLabel {{
-                color: {TEXT_COLOR};
+                color: {palette["text"]};
             }}
         """)
 
     def _fixed_width(self, widget, width):
         widget.setMinimumWidth(width)
         widget.setMaximumWidth(width)
+        if isinstance(widget, (LineEdit, ComboBox, SpinBox)):
+            widget.setMinimumHeight(FIELD_CONTROL_HEIGHT)
+            widget.setMaximumHeight(FIELD_CONTROL_HEIGHT)
         return widget
+
+    def _field_action_button(self, button):
+        button.setMinimumHeight(FIELD_CONTROL_HEIGHT)
+        button.setMaximumHeight(FIELD_CONTROL_HEIGHT)
+        self.field_action_buttons.append(button)
+        return button
 
     def _panel(self, title, icon=None):
         card = SimpleCardWidget()
@@ -873,16 +898,17 @@ class SplitApp(QWidget):
         self.workflow_rail = self._build_workflow_rail()
         body.addWidget(self.workflow_rail)
 
-        scroll = ScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area = ScrollArea()
+        self.scroll_area.setObjectName("mainScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_widget = QWidget()
         scroll_widget.setObjectName("mainPanelHost")
         self.main_panel_layout = QVBoxLayout(scroll_widget)
         self.main_panel_layout.setContentsMargins(0, 0, 0, 0)
         self.main_panel_layout.setSpacing(10)
-        scroll.setWidget(scroll_widget)
-        body.addWidget(scroll, 1)
+        self.scroll_area.setWidget(scroll_widget)
+        body.addWidget(self.scroll_area, 1)
         root_layout.addLayout(body, 1)
 
         self._build_source_card()
@@ -934,10 +960,10 @@ class SplitApp(QWidget):
         row1 = QHBoxLayout()
         self.edit_source = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
         self.edit_source.setPlaceholderText("Source Excel file")
-        self.btn_browse_source = ToolButton(FIF.FOLDER)
+        self.btn_browse_source = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_source.clicked.connect(self.browse_source)
         row1.addWidget(self._labeled("Workbook", self.edit_source))
-        row1.addWidget(self.btn_browse_source)
+        row1.addWidget(self.btn_browse_source, 0, Qt.AlignBottom)
         row1.addStretch()
         layout.addLayout(row1)
 
@@ -946,20 +972,20 @@ class SplitApp(QWidget):
         grid.setVerticalSpacing(8)
         self.cmb_sheet = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
         self.cmb_sheet.setPlaceholderText("Sheet")
-        self.btn_load_sheets = PushButton("Load Sheets")
+        self.btn_load_sheets = self._field_action_button(PushButton("Load Sheets"))
         self.btn_load_sheets.clicked.connect(self.load_sheets)
         self.cmb_key = self._fixed_width(ComboBox(), COMBO_FIELD_WIDTH)
         self.cmb_key.setPlaceholderText("Key Column")
-        self.btn_load_headers = PushButton("Load Headers")
+        self.btn_load_headers = self._field_action_button(PushButton("Load Headers"))
         self.btn_load_headers.clicked.connect(self.load_headers)
         self.spin_header_rows = self._fixed_width(SpinBox(), SMALL_FIELD_WIDTH)
         self.spin_header_rows.setRange(1, 100)
         self.spin_header_rows.setValue(5)
 
         grid.addWidget(self._labeled("Sheet", self.cmb_sheet), 0, 0)
-        grid.addWidget(self.btn_load_sheets, 0, 1)
+        grid.addWidget(self.btn_load_sheets, 0, 1, Qt.AlignBottom)
         grid.addWidget(self._labeled("Key Column", self.cmb_key), 0, 2)
-        grid.addWidget(self.btn_load_headers, 0, 3)
+        grid.addWidget(self.btn_load_headers, 0, 3, Qt.AlignBottom)
         grid.addWidget(self._labeled("Header Rows", self.spin_header_rows), 0, 4)
         grid.setColumnStretch(5, 1)
         layout.addLayout(grid)
@@ -987,10 +1013,10 @@ class SplitApp(QWidget):
         row1.setSpacing(8)
         self.edit_template = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
         self.edit_template.setPlaceholderText("Template Excel file")
-        self.btn_browse_template = ToolButton(FIF.FOLDER)
+        self.btn_browse_template = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_template.clicked.connect(self.browse_template)
         row1.addWidget(self._labeled("Template Workbook", self.edit_template))
-        row1.addWidget(self.btn_browse_template)
+        row1.addWidget(self.btn_browse_template, 0, Qt.AlignBottom)
         row1.addStretch()
         layout.addWidget(self.template_file_row_widget)
 
@@ -1022,10 +1048,10 @@ class SplitApp(QWidget):
         row1 = QHBoxLayout()
         self.edit_outdir = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
         self.edit_outdir.setPlaceholderText("Output folder")
-        self.btn_browse_outdir = ToolButton(FIF.FOLDER)
+        self.btn_browse_outdir = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_outdir.clicked.connect(self.browse_outdir)
         row1.addWidget(self._labeled("Folder", self.edit_outdir))
-        row1.addWidget(self.btn_browse_outdir)
+        row1.addWidget(self.btn_browse_outdir, 0, Qt.AlignBottom)
         row1.addStretch()
         layout.addLayout(row1)
 
@@ -1042,7 +1068,7 @@ class SplitApp(QWidget):
         self.cmb_pdf_engine.currentTextChanged.connect(self.on_pdf_engine_changed)
         self.edit_lo_path = self._fixed_width(LineEdit(), SECONDARY_PATH_FIELD_WIDTH)
         self.edit_lo_path.setPlaceholderText("soffice.exe")
-        self.btn_browse_soffice = ToolButton(FIF.FOLDER)
+        self.btn_browse_soffice = self._field_action_button(ToolButton(FIF.FOLDER))
         self.btn_browse_soffice.clicked.connect(self.browse_soffice)
 
         options.addWidget(self._labeled("Prefix", self.edit_prefix), 0, 0)
@@ -1056,7 +1082,7 @@ class SplitApp(QWidget):
         lo_row.setContentsMargins(0, 0, 0, 0)
         lo_row.setSpacing(8)
         lo_row.addWidget(self._labeled("LibreOffice", self.edit_lo_path))
-        lo_row.addWidget(self.btn_browse_soffice)
+        lo_row.addWidget(self.btn_browse_soffice, 0, Qt.AlignBottom)
         lo_row.addStretch()
         layout.addWidget(self.lo_path_row_widget)
         self.on_pdf_engine_changed()

@@ -13,6 +13,7 @@ if os.name == "nt" and os.path.isdir(r"C:\Windows\Fonts"):
 try:
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
+    from qfluentwidgets import Theme, isDarkTheme, qconfig
     with redirect_stdout(StringIO()):
         import main
 except ModuleNotFoundError as exc:
@@ -96,15 +97,31 @@ class UISmokeTests(unittest.TestCase):
 
             self.assertEqual(window.mapping_status_labels["Worker"].text(), "Mapped")
 
-    def test_dashboard_uses_explicit_light_surfaces(self):
+    def test_dashboard_uses_native_theme_mode_with_matching_surfaces(self):
         with tempfile.TemporaryDirectory() as tmp:
             window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
             self.addCleanup(window.deleteLater)
 
             self.assertEqual(window.objectName(), "appRoot")
             self.assertEqual(window.workflow_rail.objectName(), "workflowRail")
-            self.assertIn("#f5f7fb", window.styleSheet())
-            self.assertIn("#ffffff", window.styleSheet())
+            self.assertEqual(qconfig.themeMode.value, Theme.AUTO)
+            if isDarkTheme():
+                self.assertIn("#202020", window.styleSheet())
+                self.assertNotIn("#f5f7fb", window.styleSheet())
+            else:
+                self.assertIn("#f5f7fb", window.styleSheet())
+                self.assertNotIn("#202020", window.styleSheet())
+
+    def test_field_action_buttons_share_input_height_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "field_action_buttons"))
+            self.assertGreaterEqual(len(window.field_action_buttons), 6)
+            for button in window.field_action_buttons:
+                self.assertEqual(button.minimumHeight(), main.FIELD_CONTROL_HEIGHT)
+                self.assertEqual(button.maximumHeight(), main.FIELD_CONTROL_HEIGHT)
 
     def test_libreoffice_path_row_only_shows_for_libreoffice_pdf_engine(self):
         with tempfile.TemporaryDirectory() as tmp:
