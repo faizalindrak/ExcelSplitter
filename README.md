@@ -152,6 +152,25 @@ For each unique value in the key column, the application creates:
 - **Excel file**: `{prefix} {key_value} {suffix}.xlsx`
 - **PDF file** (optional): `{prefix} {key_value} {suffix}.pdf`
 
+### Mail Merge
+
+After a successful split, click **Mail Merge** to send generated files by email.
+
+Recipient mapping is loaded from an Excel worksheet with one row per split key:
+
+- `Key`: matches the split key value
+- `To`: required recipient address list
+- `CC`: optional
+- `BCC`: optional
+
+Multiple email addresses in `To`, `CC`, and `BCC` use semicolon separators.
+
+Mail Merge supports in-app subject/body placeholders such as `{key}`, `{to}`, and columns from the recipient mapping worksheet. An optional `.html` file can be used as the email body template.
+
+Before sending, the app shows a carousel preview so each email can be checked one by one. Strict validation blocks sending if recipients, attachments, subject, body, or Outlook availability are invalid.
+
+The first sending provider is Microsoft Outlook desktop. Delay delivery sets Outlook's deferred delivery time, and throttle controls how quickly the app hands messages to Outlook.
+
 ### PDF Export Options
 
 #### xlwings (Microsoft Excel)
