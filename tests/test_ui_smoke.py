@@ -229,6 +229,34 @@ class UISmokeTests(unittest.TestCase):
             window.set_busy(True)
             self.assertFalse(window.progress_bar.isHidden())
 
+    def test_mail_merge_button_hidden_until_split_results_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "btn_mail_merge"))
+            self.assertTrue(window.btn_mail_merge.isHidden())
+
+            window.current_split_results = [
+                main.SplitResult(key="A", excel_path=Path(tmp) / "A.xlsx", output_file_type=main.OUTPUT_TYPE_EXCEL)
+            ]
+            window.update_mail_merge_entry_state()
+
+            self.assertFalse(window.btn_mail_merge.isHidden())
+
+    def test_show_mail_merge_panel_reveals_panel_with_loaded_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.current_split_results = [
+                main.SplitResult(key="A", excel_path=Path(tmp) / "A.xlsx", output_file_type=main.OUTPUT_TYPE_EXCEL)
+            ]
+
+            window.show_mail_merge_panel()
+
+            self.assertFalse(window.mail_merge_card.isHidden())
+            self.assertIn("1 split file", window.lbl_mail_merge_summary.text())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -903,6 +903,10 @@ class SplitApp(QWidget):
         self.mapping_combos = {}
         self.mapping_status_labels = {}
         self.field_action_buttons = []
+        self.current_split_results = []
+        self.current_mail_jobs = []
+        self.current_mail_warnings = []
+        self.current_preview_index = 0
 
         self._build_ui()
         self.load_settings()
@@ -1020,6 +1024,7 @@ class SplitApp(QWidget):
         self._build_mapping_card()
         self._build_output_card()
         self._build_log_card()
+        self._build_mail_merge_card()
 
         self.main_panel_layout.addStretch()
 
@@ -1235,6 +1240,24 @@ class SplitApp(QWidget):
         layout.addWidget(self.txt_log)
         self.main_panel_layout.addWidget(card)
 
+    def _build_mail_merge_card(self):
+        self.mail_merge_card, layout = self._panel("Mail Merge", FIF.MAIL)
+        self.lbl_mail_merge_summary = CaptionLabel("No split results loaded.")
+        layout.addWidget(self.lbl_mail_merge_summary)
+        self.mail_merge_card.setVisible(False)
+        self.main_panel_layout.addWidget(self.mail_merge_card)
+
+    def update_mail_merge_entry_state(self):
+        has_results = bool(self.current_split_results)
+        self.btn_mail_merge.setVisible(has_results)
+
+    def show_mail_merge_panel(self):
+        count = len(self.current_split_results)
+        suffix = "file" if count == 1 else "files"
+        self.lbl_mail_merge_summary.setText(f"{count} split {suffix} loaded for mail merge.")
+        self.mail_merge_card.setVisible(True)
+        self.update_mail_merge_entry_state()
+
     def _build_actions_card(self, layout):
         self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")
         self.btn_generate.setFixedHeight(38)
@@ -1247,6 +1270,10 @@ class SplitApp(QWidget):
         self.btn_open_output.setFixedHeight(36)
         self.btn_open_output.clicked.connect(self.open_output_folder)
         self.btn_open_output.setVisible(False)
+        self.btn_mail_merge = PushButton(FIF.MAIL, "Mail Merge")
+        self.btn_mail_merge.setFixedHeight(36)
+        self.btn_mail_merge.clicked.connect(self.show_mail_merge_panel)
+        self.btn_mail_merge.setVisible(False)
         self.btn_debug = PushButton("Debug Excel")
         self.btn_debug.setFixedHeight(36)
         self.btn_debug.clicked.connect(self.debug_excel)
@@ -1254,6 +1281,7 @@ class SplitApp(QWidget):
         layout.addWidget(self.btn_generate)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.btn_open_output)
+        layout.addWidget(self.btn_mail_merge)
         layout.addWidget(self.btn_debug)
         layout.addStretch()
     def log(self, msg):
@@ -1879,6 +1907,8 @@ class SplitApp(QWidget):
     def _on_worker_finished(self):
         self.set_busy(False)
         self.log("Selesai.")
+        self.current_split_results = list(getattr(self.worker, "results", []))
+        self.update_mail_merge_entry_state()
         self.btn_open_output.setVisible(True)
         if (
             output_requires_pdf(self.current_output_file_type())
