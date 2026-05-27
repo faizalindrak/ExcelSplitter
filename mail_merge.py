@@ -147,3 +147,101 @@ def load_recipient_rows(
             )
         )
     return rows
+
+
+def _recipient_context(recipient: RecipientRow, split_result: SplitResult) -> dict[str, object]:
+    context: dict[str, object] = {}
+    context.update(recipient.raw)
+    context.update(
+        {
+            "key": split_result.key,
+            "to": "; ".join(recipient.to),
+            "cc": "; ".join(recipient.cc),
+            "bcc": "; ".join(recipient.bcc),
+            "excel_file": split_result.excel_path or "",
+            "pdf_file": split_result.pdf_path or "",
+        }
+    )
+    return context
+
+
+def _validate_addresses(label: str, addresses: Iterable[str]) -> list[str]:
+    return [f"Invalid {label} email: {address}" for address in addresses if not is_valid_email(address)]
+
+
+def _selected_attachments(
+    split_result: SplitResult,
+    selection: AttachmentSelection,
+    errors: list[str],
+) -> list[Path]:
+    attachments: list[Path] = []
+    if selection.attach_excel:
+        if split_result.excel_path and split_result.excel_path.exists():
+            attachments.append(split_result.excel_path)
+        else:
+            errors.append(f"Selected Excel attachment is missing for key {split_result.key}")
+    if selection.attach_pdf:
+        if split_result.pdf_path and split_result.pdf_path.exists():
+            attachments.append(split_result.pdf_path)
+        else:
+            errors.append(f"Selected PDF attachment is missing for key {split_result.key}")
+    return attachments
+
+
+def build_email_jobs(
+    split_results: list[SplitResult],
+    recipients: list[RecipientRow],
+    template: EmailTemplate,
+    attachments: AttachmentSelection,
+) -> tuple[list[EmailJob], list[str]]:
+    recipient_by_key = {row.key: row for row in recipients}
+    split_keys = {result.key for result in split_results}
+    warnings = [
+        f"Recipient mapping key {row.key} does not match a generated split file"
+        for row in recipients
+        if row.key not in split_keys
+    ]
+    jobs: list[EmailJob] = []
+
+    for split_result in split_results:
+        errors: list[str] = []
+        recipient = recipient_by_key.get(split_result.key)
+        if recipient is None:
+            errors.append(f"No recipient mapping for key {split_result.key}")
+            recipient = RecipientRow(key=split_result.key, to=[], cc=[], bcc=[], raw={})
+
+        if not recipient.to:
+            errors.append(f"Required To is empty for key {split_result.key}")
+        errors.extend(_validate_addresses("To", recipient.to))
+        errors.extend(_validate_addresses("CC", recipient.cc))
+        errors.extend(_validate_addresses("BCC", recipient.bcc))
+
+        context = _recipient_context(recipient, split_result)
+        subject = render_placeholders(template.subject, context).strip()
+        body = render_placeholders(template.body, context).strip()
+        if not subject:
+            errors.append(f"Rendered subject is empty for key {split_result.key}")
+        if not body:
+            errors.append(f"Rendered body is empty for key {split_result.key}")
+
+        selected_files = _selected_attachments(split_result, attachments, errors)
+        jobs.append(
+            EmailJob(
+                key=split_result.key,
+                to=recipient.to,
+                cc=recipient.cc,
+                bcc=recipient.bcc,
+                subject=subject,
+                body=body,
+                is_html=template.is_html,
+                attachments=selected_files,
+                validation_errors=errors,
+                validation_warnings=[],
+            )
+        )
+
+    return jobs, warnings
+
+
+def all_jobs_valid(jobs: list[EmailJob]) -> bool:
+    return all(job.is_valid for job in jobs)

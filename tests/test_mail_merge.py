@@ -86,6 +86,74 @@ class MailMergeCoreTests(unittest.TestCase):
             self.assertEqual(rows[0].raw["Team"], "Finance")
             self.assertEqual(rows[1].bcc, [])
 
+    def test_build_email_jobs_renders_content_and_selected_attachments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            excel_path = Path(tmp) / "A.xlsx"
+            pdf_path = Path(tmp) / "A.pdf"
+            excel_path.write_text("excel", encoding="utf-8")
+            pdf_path.write_text("pdf", encoding="utf-8")
+
+            jobs, warnings = mail_merge.build_email_jobs(
+                split_results=[
+                    mail_merge.SplitResult("A", excel_path=excel_path, pdf_path=pdf_path, output_file_type="excel_and_pdf")
+                ],
+                recipients=[
+                    mail_merge.RecipientRow(
+                        key="A",
+                        to=["a@example.com"],
+                        cc=[],
+                        bcc=[],
+                        raw={"Department": "Finance"},
+                    )
+                ],
+                template=mail_merge.EmailTemplate(
+                    subject="Report {key} {Department}",
+                    body="Hello {to}, file {excel_file}",
+                    is_html=False,
+                ),
+                attachments=mail_merge.AttachmentSelection(attach_excel=True, attach_pdf=True),
+            )
+
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0].subject, "Report A Finance")
+            self.assertEqual(jobs[0].body, f"Hello a@example.com, file {excel_path}")
+            self.assertEqual(jobs[0].attachments, [excel_path, pdf_path])
+            self.assertTrue(jobs[0].is_valid)
+
+    def test_build_email_jobs_reports_missing_mapping_and_ignores_extra_mapping_rows(self):
+        split_results = [mail_merge.SplitResult("A")]
+        recipients = [
+            mail_merge.RecipientRow(key="B", to=["b@example.com"], raw={}),
+        ]
+
+        jobs, warnings = mail_merge.build_email_jobs(
+            split_results=split_results,
+            recipients=recipients,
+            template=mail_merge.EmailTemplate(subject="Subject", body="Body"),
+            attachments=mail_merge.AttachmentSelection(attach_excel=False, attach_pdf=False),
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("No recipient mapping for key A", jobs[0].validation_errors)
+        self.assertEqual(warnings, ["Recipient mapping key B does not match a generated split file"])
+
+    def test_build_email_jobs_validates_email_subject_body_and_attachments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_pdf = Path(tmp) / "A.pdf"
+            jobs, warnings = mail_merge.build_email_jobs(
+                split_results=[mail_merge.SplitResult("A", pdf_path=missing_pdf, output_file_type="pdf")],
+                recipients=[mail_merge.RecipientRow(key="A", to=["bad-email"], raw={})],
+                template=mail_merge.EmailTemplate(subject=" ", body=" "),
+                attachments=mail_merge.AttachmentSelection(attach_excel=False, attach_pdf=True),
+            )
+
+            self.assertEqual(warnings, [])
+            self.assertIn("Invalid To email: bad-email", jobs[0].validation_errors)
+            self.assertIn("Selected PDF attachment is missing for key A", jobs[0].validation_errors)
+            self.assertIn("Rendered subject is empty for key A", jobs[0].validation_errors)
+            self.assertIn("Rendered body is empty for key A", jobs[0].validation_errors)
+
 
 if __name__ == "__main__":
     unittest.main()
