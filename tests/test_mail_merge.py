@@ -138,6 +138,31 @@ class MailMergeCoreTests(unittest.TestCase):
         self.assertIn("No recipient mapping for key A", jobs[0].validation_errors)
         self.assertEqual(warnings, ["Recipient mapping key B does not match a generated split file"])
 
+    def test_build_email_jobs_without_split_results_uses_recipient_rows(self):
+        jobs, warnings = mail_merge.build_email_jobs(
+            split_results=[],
+            recipients=[
+                mail_merge.RecipientRow(
+                    key="A",
+                    to=["a@example.com"],
+                    raw={"Department": "Finance"},
+                ),
+            ],
+            template=mail_merge.EmailTemplate(
+                subject="Report {key} {Department}",
+                body="Hello {to}",
+            ),
+            attachments=mail_merge.AttachmentSelection(attach_excel=False, attach_pdf=False),
+        )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].key, "A")
+        self.assertEqual(jobs[0].subject, "Report A Finance")
+        self.assertEqual(jobs[0].body, "Hello a@example.com")
+        self.assertEqual(jobs[0].attachments, [])
+        self.assertTrue(jobs[0].is_valid)
+
     def test_build_email_jobs_validates_email_subject_body_and_attachments(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing_pdf = Path(tmp) / "A.pdf"

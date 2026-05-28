@@ -229,13 +229,18 @@ class UISmokeTests(unittest.TestCase):
             window.set_busy(True)
             self.assertFalse(window.progress_bar.isHidden())
 
-    def test_mail_merge_button_hidden_until_split_results_exist(self):
+    def test_mail_merge_button_is_available_without_split_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
             self.addCleanup(window.deleteLater)
 
             self.assertTrue(hasattr(window, "btn_mail_merge"))
-            self.assertTrue(window.btn_mail_merge.isHidden())
+            self.assertFalse(window.btn_mail_merge.isHidden())
+
+            window.show_mail_merge_panel()
+
+            self.assertFalse(window.mail_merge_card.isHidden())
+            self.assertIn("No split files", window.lbl_mail_merge_summary.text())
 
             window.current_split_results = [
                 main.SplitResult(key="A", excel_path=Path(tmp) / "A.xlsx", output_file_type=main.OUTPUT_TYPE_EXCEL)
@@ -269,6 +274,15 @@ class UISmokeTests(unittest.TestCase):
             self.assertTrue(hasattr(window, "cmb_recipient_to"))
             self.assertTrue(hasattr(window, "cmb_recipient_cc"))
             self.assertTrue(hasattr(window, "cmb_recipient_bcc"))
+
+    def test_mail_merge_layout_fits_default_window_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            window.show_mail_merge_panel()
+
+            self.assertLessEqual(window.mail_merge_card.sizeHint().width(), 760)
 
     def test_mail_merge_preview_carousel_moves_between_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:

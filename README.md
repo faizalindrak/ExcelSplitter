@@ -154,7 +154,7 @@ For each unique value in the key column, the application creates:
 
 ### Mail Merge
 
-After a successful split, click **Mail Merge** to send generated files by email.
+Click **Mail Merge** from the main action bar to send recipient-based email. You can open it before splitting files for recipient-only email, or after a split to attach the generated Excel/PDF outputs.
 
 Recipient mapping is loaded from an Excel worksheet with one row per split key:
 

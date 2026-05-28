@@ -188,12 +188,55 @@ def _selected_attachments(
     return attachments
 
 
+def _build_email_job(
+    split_result: SplitResult,
+    recipient: RecipientRow,
+    template: EmailTemplate,
+    attachments: AttachmentSelection,
+    initial_errors: list[str] | None = None,
+) -> EmailJob:
+    errors = list(initial_errors or [])
+    if not recipient.to:
+        errors.append(f"Required To is empty for key {split_result.key}")
+    errors.extend(_validate_addresses("To", recipient.to))
+    errors.extend(_validate_addresses("CC", recipient.cc))
+    errors.extend(_validate_addresses("BCC", recipient.bcc))
+
+    context = _recipient_context(recipient, split_result)
+    subject = render_placeholders(template.subject, context).strip()
+    body = render_placeholders(template.body, context).strip()
+    if not subject:
+        errors.append(f"Rendered subject is empty for key {split_result.key}")
+    if not body:
+        errors.append(f"Rendered body is empty for key {split_result.key}")
+
+    selected_files = _selected_attachments(split_result, attachments, errors)
+    return EmailJob(
+        key=split_result.key,
+        to=recipient.to,
+        cc=recipient.cc,
+        bcc=recipient.bcc,
+        subject=subject,
+        body=body,
+        is_html=template.is_html,
+        attachments=selected_files,
+        validation_errors=errors,
+        validation_warnings=[],
+    )
+
+
 def build_email_jobs(
     split_results: list[SplitResult],
     recipients: list[RecipientRow],
     template: EmailTemplate,
     attachments: AttachmentSelection,
 ) -> tuple[list[EmailJob], list[str]]:
+    if not split_results:
+        return [
+            _build_email_job(SplitResult(key=recipient.key), recipient, template, attachments)
+            for recipient in recipients
+        ], []
+
     recipient_by_key = {row.key: row for row in recipients}
     split_keys = {result.key for result in split_results}
     warnings = [
@@ -204,40 +247,14 @@ def build_email_jobs(
     jobs: list[EmailJob] = []
 
     for split_result in split_results:
-        errors: list[str] = []
         recipient = recipient_by_key.get(split_result.key)
+        errors: list[str] = []
         if recipient is None:
             errors.append(f"No recipient mapping for key {split_result.key}")
             recipient = RecipientRow(key=split_result.key, to=[], cc=[], bcc=[], raw={})
 
-        if not recipient.to:
-            errors.append(f"Required To is empty for key {split_result.key}")
-        errors.extend(_validate_addresses("To", recipient.to))
-        errors.extend(_validate_addresses("CC", recipient.cc))
-        errors.extend(_validate_addresses("BCC", recipient.bcc))
-
-        context = _recipient_context(recipient, split_result)
-        subject = render_placeholders(template.subject, context).strip()
-        body = render_placeholders(template.body, context).strip()
-        if not subject:
-            errors.append(f"Rendered subject is empty for key {split_result.key}")
-        if not body:
-            errors.append(f"Rendered body is empty for key {split_result.key}")
-
-        selected_files = _selected_attachments(split_result, attachments, errors)
         jobs.append(
-            EmailJob(
-                key=split_result.key,
-                to=recipient.to,
-                cc=recipient.cc,
-                bcc=recipient.bcc,
-                subject=subject,
-                body=body,
-                is_html=template.is_html,
-                attachments=selected_files,
-                validation_errors=errors,
-                validation_warnings=[],
-            )
+            _build_email_job(split_result, recipient, template, attachments, initial_errors=errors)
         )
 
     return jobs, warnings
