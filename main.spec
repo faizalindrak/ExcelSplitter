@@ -16,12 +16,33 @@ import sys
 import os
 
 # ---- opsi yang bisa kamu ubah ----
-APP_NAME    = "ExcelSplitter"
-ENTRY_SCRIPT= "main.py"
-ICON_PATH   = None   # contoh: "app.ico"  (atau None jika tidak pakai)
-CONSOLE     = False  # GUI app
-UPX         = True   # butuh UPX terpasang agar efektif, kalau tidak ada tetap aman
+APP_NAME     = "ExcelSplitter"
+APP_VERSION  = "1.0.0"
+ENTRY_SCRIPT = "main.py"
+ICON_PATH    = None   # contoh: "app.ico"  (atau None jika tidak pakai)
+CONSOLE      = False  # GUI app
+UPX          = True   # butuh UPX terpasang agar efektif, kalau tidak ada tetap aman
+# version_info.txt menanamkan metadata versi (1.0.0) ke exe Windows.
+VERSION_FILE = "version_info.txt" if os.path.exists("version_info.txt") else None
 # ----------------------------------
+
+# Segmen paket yang tidak dipakai saat runtime. Memfilter ini dari
+# collect_submodules mencegah PyInstaller menganalisis ribuan modul test/demo
+# (mis. pandas.tests.*, win32com.test/demos.*) sehingga build jauh lebih cepat.
+_SKIP_SEGMENTS = {
+    "tests", "test", "testing", "_testing", "conftest",
+    "demos", "demo", "docs", "examples", "benchmarks",
+}
+
+
+def collect_runtime_submodules(package):
+    """collect_submodules tanpa paket test/demo agar analisis lebih cepat."""
+    try:
+        modules = collect_submodules(package)
+    except Exception:
+        return []
+    return [m for m in modules if not (set(m.split(".")) & _SKIP_SEGMENTS)]
+
 
 # Kumpulkan data & modul tambahan dari paket pihak-3
 datas  = []
@@ -30,10 +51,10 @@ hiddenimports = []
 
 # openpyxl (baca & tulis xlsx)
 datas += collect_data_files("openpyxl", include_py_files=False)
-hiddenimports += collect_submodules("openpyxl")
+hiddenimports += collect_runtime_submodules("openpyxl")
 
 # pandas (IO excel & grouping)
-hiddenimports += collect_submodules("pandas")
+hiddenimports += collect_runtime_submodules("pandas")
 
 # PySide6 / Fluent Widgets UI
 hiddenimports += [
@@ -42,23 +63,24 @@ hiddenimports += [
     "PySide6.QtWidgets",
 ]
 datas += collect_data_files("qfluentwidgets", include_py_files=False)
+# Kumpulkan penuh agar seluruh toolkit UI ikut ter-bundle.
 hiddenimports += collect_submodules("qfluentwidgets")
 
 # xlwings (Excel COM automation)
 try:
     datas += collect_data_files("xlwings", include_py_files=False)
-    hiddenimports += collect_submodules("xlwings")
+    hiddenimports += collect_runtime_submodules("xlwings")
 except:
     pass  # xlwings mungkin tidak terpasang
 
 # pywin32 (Windows COM interface)
 try:
-    hiddenimports += collect_submodules("win32com")
-    hiddenimports += collect_submodules("pythoncom")
-    hiddenimports += collect_submodules("pywintypes")
-    hiddenimports += collect_submodules("win32api")
-    hiddenimports += collect_submodules("win32gui")
-    hiddenimports += collect_submodules("win32con")
+    hiddenimports += collect_runtime_submodules("win32com")
+    hiddenimports += collect_runtime_submodules("pythoncom")
+    hiddenimports += collect_runtime_submodules("pywintypes")
+    hiddenimports += collect_runtime_submodules("win32api")
+    hiddenimports += collect_runtime_submodules("win32gui")
+    hiddenimports += collect_runtime_submodules("win32con")
 
     # Tambahan hidden imports yang sering dibutuhkan
     hiddenimports += [
@@ -73,7 +95,7 @@ except:
 
 # psutil (untuk process management, opsional)
 try:
-    hiddenimports += collect_submodules("psutil")
+    hiddenimports += collect_runtime_submodules("psutil")
 except:
     pass
 
@@ -95,6 +117,20 @@ hiddenimports += [
 
 # Qt assets umumnya sudah di-bundle otomatis oleh PyInstaller hooks.
 
+# Paket yang pasti tidak dipakai runtime. Mengecualikannya memangkas waktu
+# analisis dan ukuran exe tanpa memengaruhi fungsi aplikasi.
+excludes = [
+    "pandas.tests",
+    "numpy.tests",
+    "scipy",          # ditarik transitif oleh qfluentwidgets, tidak dipakai
+    "matplotlib",
+    "tkinter",
+    "pytest",
+    "unittest",
+    "win32com.test",
+    "win32com.demos",
+]
+
 block_cipher = None
 
 a = Analysis(
@@ -106,7 +142,7 @@ a = Analysis(
     hookspath=[],          # bisa tambahkan path hook kustom di sini
     hooksconfig={},        # config hook opsional
     runtime_hooks=[],      # runtime hook opsional
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 
@@ -127,5 +163,6 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=CONSOLE,
-    icon=ICON_PATH
+    icon=ICON_PATH,
+    version=VERSION_FILE
 )
