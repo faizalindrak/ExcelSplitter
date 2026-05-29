@@ -347,6 +347,49 @@ class UISmokeTests(unittest.TestCase):
             self.assertTrue(window.chk_attach_pdf.isEnabled())
             self.assertTrue(window.chk_attach_pdf.isChecked())
 
+    def test_mail_merge_split_folder_controls_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "edit_split_folder"))
+            self.assertTrue(hasattr(window, "btn_browse_split_folder"))
+            self.assertTrue(hasattr(window, "edit_detect_prefix"))
+            self.assertTrue(hasattr(window, "edit_detect_suffix"))
+            self.assertTrue(hasattr(window, "btn_scan_split_folder"))
+
+    def test_scan_split_folder_loads_paired_split_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            excel_a = tmp_path / "Report A Final.xlsx"
+            pdf_a = tmp_path / "Report A Final.pdf"
+            excel_b = tmp_path / "Report B Final.xlsx"
+            
+            wb = Workbook()
+            wb.save(excel_a)
+            pdf_a.write_bytes(b"%PDF-1.4\n")
+            wb2 = Workbook()
+            wb2.save(excel_b)
+
+            window = main.SplitApp(settings=self.make_settings(tmp_path / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            
+            window.edit_split_folder.setText(str(tmp_path))
+            window.edit_detect_prefix.setText("Report")
+            window.edit_detect_suffix.setText("Final")
+            window.scan_split_folder()
+
+            self.assertEqual(len(window.current_split_results), 2)
+            keys = sorted([r.key for r in window.current_split_results])
+            self.assertEqual(keys, ["A", "B"])
+            
+            result_a = next(r for r in window.current_split_results if r.key == "A")
+            self.assertIsNotNone(result_a.excel_path)
+            self.assertIsNotNone(result_a.pdf_path)
+            self.assertEqual(result_a.output_file_type, main.OUTPUT_TYPE_EXCEL_AND_PDF)
+            
+            self.assertIn("2 split files", window.lbl_mail_merge_summary.text())
+
 
 if __name__ == "__main__":
     unittest.main()

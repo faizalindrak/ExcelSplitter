@@ -289,6 +289,175 @@ class MailMergeCoreTests(unittest.TestCase):
         self.assertEqual(sleeps, [5])
         self.assertEqual(statuses, ["Sending 1/2: A", "Sending 2/2: B"])
 
+    def test_detect_key_from_filename_with_prefix_and_suffix_both_present(self):
+        result = mail_merge.detect_key_from_filename("Report 12345 Final", prefix="Report", suffix="Final")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_with_no_prefix_suffix(self):
+        result = mail_merge.detect_key_from_filename("12345", prefix="", suffix="")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_with_prefix_only(self):
+        result = mail_merge.detect_key_from_filename("Report 12345", prefix="Report", suffix="")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_with_suffix_only(self):
+        result = mail_merge.detect_key_from_filename("12345 Final", prefix="", suffix="Final")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_prefix_not_matching_but_suffix_matches(self):
+        result = mail_merge.detect_key_from_filename("12345 Final", prefix="Report", suffix="Final")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_suffix_not_matching_but_prefix_matches(self):
+        result = mail_merge.detect_key_from_filename("Report 12345", prefix="Report", suffix="Final")
+        self.assertEqual(result, "12345")
+
+    def test_detect_key_from_filename_key_containing_spaces(self):
+        result = mail_merge.detect_key_from_filename("Report North East Final", prefix="Report", suffix="Final")
+        self.assertEqual(result, "North East")
+
+    def test_detect_key_from_filename_returns_original_if_empty_after_strip(self):
+        result = mail_merge.detect_key_from_filename("Report Final", prefix="Report", suffix="Final")
+        self.assertEqual(result, "Report Final")
+
+    def test_detect_key_from_filename_case_sensitive_matching(self):
+        result = mail_merge.detect_key_from_filename("report 12345 final", prefix="Report", suffix="Final")
+        self.assertEqual(result, "report 12345 final")
+
+    def test_discover_split_results_pairs_xlsx_and_pdf_same_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            xlsx_path = folder / "12345.xlsx"
+            pdf_path = folder / "12345.pdf"
+            wb = Workbook()
+            wb.save(xlsx_path)
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "12345")
+            self.assertEqual(results[0].excel_path, xlsx_path)
+            self.assertEqual(results[0].pdf_path, pdf_path)
+            self.assertEqual(results[0].output_file_type, "excel_and_pdf")
+
+    def test_discover_split_results_excel_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            xlsx_path = folder / "12345.xlsx"
+            wb = Workbook()
+            wb.save(xlsx_path)
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "12345")
+            self.assertEqual(results[0].excel_path, xlsx_path)
+            self.assertIsNone(results[0].pdf_path)
+            self.assertEqual(results[0].output_file_type, "excel")
+
+    def test_discover_split_results_pdf_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf_path = folder / "12345.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "12345")
+            self.assertIsNone(results[0].excel_path)
+            self.assertEqual(results[0].pdf_path, pdf_path)
+            self.assertEqual(results[0].output_file_type, "pdf")
+
+    def test_discover_split_results_ignores_temp_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            xlsx_path = folder / "12345.xlsx"
+            temp_path = folder / "~$12345.xlsx"
+            wb = Workbook()
+            wb.save(xlsx_path)
+            wb.save(temp_path)
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "12345")
+
+    def test_discover_split_results_returns_empty_for_nonexistent_folder(self):
+        results = mail_merge.discover_split_results_from_folder(Path("/nonexistent/folder"), prefix="", suffix="")
+        self.assertEqual(results, [])
+
+    def test_discover_split_results_with_prefix_suffix_and_sorts_by_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "Report 12345 Final.xlsx").write_bytes(b"")
+            wb1 = Workbook()
+            wb1.save(folder / "Report 12345 Final.xlsx")
+            (folder / "Report 12345 Final.pdf").write_bytes(b"%PDF-1.4\n")
+            wb2 = Workbook()
+            wb2.save(folder / "Report 67890 Final.xlsx")
+            (folder / "Report 67890 Final.pdf").write_bytes(b"%PDF-1.4\n")
+            wb3 = Workbook()
+            wb3.save(folder / "Report AAAAA Final.xlsx")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="Report", suffix="Final")
+
+            self.assertEqual(len(results), 3)
+            self.assertEqual(results[0].key, "12345")
+            self.assertEqual(results[0].output_file_type, "excel_and_pdf")
+            self.assertEqual(results[1].key, "67890")
+            self.assertEqual(results[1].output_file_type, "excel_and_pdf")
+            self.assertEqual(results[2].key, "AAAAA")
+            self.assertEqual(results[2].output_file_type, "excel")
+
+    def test_discover_split_results_handles_duplicate_keys_deterministically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            wb1 = Workbook()
+            wb1.save(folder / "12345.xlsx")
+            wb2 = Workbook()
+            wb2.save(folder / "12345_copy.xlsx")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="")
+
+            self.assertEqual(len(results), 2)
+            keys = [r.key for r in results]
+            self.assertIn("12345", keys)
+            self.assertIn("12345_copy", keys)
+
+    def test_discover_split_results_recurse_into_subfolders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            subfolder = folder / "sub"
+            subfolder.mkdir()
+            wb1 = Workbook()
+            wb1.save(folder / "12345.xlsx")
+            wb2 = Workbook()
+            wb2.save(subfolder / "67890.xlsx")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="", recurse=True)
+
+            self.assertEqual(len(results), 2)
+            keys = sorted([r.key for r in results])
+            self.assertEqual(keys, ["12345", "67890"])
+
+    def test_discover_split_results_no_recurse_ignores_subfolders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            subfolder = folder / "sub"
+            subfolder.mkdir()
+            wb1 = Workbook()
+            wb1.save(folder / "12345.xlsx")
+            wb2 = Workbook()
+            wb2.save(subfolder / "67890.xlsx")
+
+            results = mail_merge.discover_split_results_from_folder(folder, prefix="", suffix="", recurse=False)
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "12345")
+
 
 if __name__ == "__main__":
     unittest.main()

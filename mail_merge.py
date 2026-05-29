@@ -327,3 +327,72 @@ def send_jobs(
         if timing.throttle_enabled and timing.throttle_seconds > 0 and index < len(jobs) - 1:
             sleep_fn(timing.throttle_seconds)
     return results
+
+
+def detect_key_from_filename(stem: str, prefix: str = "", suffix: str = "") -> str:
+    original = stem.strip()
+    result = stem
+    if prefix and result.startswith(prefix + " "):
+        result = result[len(prefix) + 1:]
+    if suffix:
+        if result.endswith(" " + suffix):
+            result = result[:-len(suffix) - 1]
+        elif result == suffix:
+            result = ""
+    result = result.strip()
+    if not result:
+        return original
+    return result
+
+
+def discover_split_results_from_folder(
+    folder: Path,
+    prefix: str = "",
+    suffix: str = "",
+    recurse: bool = False,
+) -> list[SplitResult]:
+    if not folder.exists() or not folder.is_dir():
+        return []
+    
+    pattern = "**/*" if recurse else "*"
+    files_by_key: dict[str, dict[str, Path]] = {}
+    
+    for path in sorted(folder.glob(pattern)):
+        if not path.is_file():
+            continue
+        if path.name.startswith("~$"):
+            continue
+        ext = path.suffix.lower()
+        if ext not in [".xlsx", ".pdf"]:
+            continue
+        
+        key = detect_key_from_filename(path.stem, prefix, suffix)
+        if key not in files_by_key:
+            files_by_key[key] = {}
+        
+        if ext == ".xlsx" and "xlsx" not in files_by_key[key]:
+            files_by_key[key]["xlsx"] = path
+        elif ext == ".pdf" and "pdf" not in files_by_key[key]:
+            files_by_key[key]["pdf"] = path
+    
+    results: list[SplitResult] = []
+    for key in sorted(files_by_key.keys()):
+        files = files_by_key[key]
+        excel_path = files.get("xlsx")
+        pdf_path = files.get("pdf")
+        
+        if excel_path and pdf_path:
+            output_type = "excel_and_pdf"
+        elif pdf_path:
+            output_type = "pdf"
+        else:
+            output_type = "excel"
+        
+        results.append(SplitResult(
+            key=key,
+            excel_path=excel_path,
+            pdf_path=pdf_path,
+            output_file_type=output_type,
+        ))
+    
+    return results

@@ -32,15 +32,16 @@ from qfluentwidgets import (
 from mail_merge import (
     all_jobs_valid,
     AttachmentSelection,
+    build_email_jobs,
+    discover_split_results_from_folder,
     EmailJob,
     EmailTemplate,
-    OutlookMailProvider,
-    SendTimingOptions,
-    SplitResult,
-    build_email_jobs,
     load_recipient_rows,
+    OutlookMailProvider,
     read_recipient_headers,
     send_jobs,
+    SendTimingOptions,
+    SplitResult,
 )
 
 TEMPLATE_MODE_TEMPLATE_FILE = "template_file"
@@ -1288,6 +1289,33 @@ class SplitApp(QWidget):
         self.lbl_mail_merge_summary = CaptionLabel("No split results loaded.")
         layout.addWidget(self.lbl_mail_merge_summary)
 
+        self.edit_split_folder = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
+        self.edit_split_folder.setPlaceholderText("Folder of split files (optional)")
+        self.btn_browse_split_folder = self._field_action_button(ToolButton(FIF.FOLDER))
+        self.btn_browse_split_folder.setToolTip("Browse Split Folder")
+        self.btn_browse_split_folder.clicked.connect(self.browse_split_folder)
+        self.edit_detect_prefix = self._fixed_width(LineEdit(), SMALL_FIELD_WIDTH)
+        self.edit_detect_prefix.setPlaceholderText("Prefix")
+        self.edit_detect_suffix = self._fixed_width(LineEdit(), SMALL_FIELD_WIDTH)
+        self.edit_detect_suffix.setPlaceholderText("Suffix")
+        self.btn_scan_split_folder = PushButton("Scan Folder")
+        self.btn_scan_split_folder.clicked.connect(self.scan_split_folder)
+
+        split_folder_row = QHBoxLayout()
+        split_folder_row.setSpacing(10)
+        split_folder_row.addWidget(self._labeled("Split Folder", self.edit_split_folder))
+        split_folder_row.addWidget(self.btn_browse_split_folder, 0, Qt.AlignBottom)
+        split_folder_row.addStretch()
+        layout.addLayout(split_folder_row)
+
+        split_detect_row = QHBoxLayout()
+        split_detect_row.setSpacing(10)
+        split_detect_row.addWidget(self._labeled("Key Prefix", self.edit_detect_prefix))
+        split_detect_row.addWidget(self._labeled("Key Suffix", self.edit_detect_suffix))
+        split_detect_row.addWidget(self.btn_scan_split_folder, 0, Qt.AlignBottom)
+        split_detect_row.addStretch()
+        layout.addLayout(split_detect_row)
+
         self.edit_recipient_path = self._fixed_width(LineEdit(), PATH_FIELD_WIDTH)
         self.edit_recipient_path.setPlaceholderText("Recipient mapping Excel file")
         self.btn_browse_recipients = self._field_action_button(ToolButton(FIF.FOLDER))
@@ -1428,16 +1456,45 @@ class SplitApp(QWidget):
     def update_mail_merge_entry_state(self):
         self.btn_mail_merge.setVisible(True)
 
-    def show_mail_merge_panel(self):
+    def refresh_mail_merge_summary(self):
         count = len(self.current_split_results)
         if count:
-            suffix = "file" if count == 1 else "files"
-            self.lbl_mail_merge_summary.setText(f"{count} split {suffix} loaded for mail merge.")
+            word = "file" if count == 1 else "files"
+            self.lbl_mail_merge_summary.setText(f"{count} split {word} loaded for mail merge.")
         else:
             self.lbl_mail_merge_summary.setText("No split files loaded. Mail Merge can send recipient-only emails.")
+
+    def show_mail_merge_panel(self):
+        self.refresh_mail_merge_summary()
         self.update_mail_attachment_options()
         self.mail_merge_card.setVisible(True)
         self.update_mail_merge_entry_state()
+
+    def browse_split_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Pilih folder hasil split", "")
+        if d:
+            self.edit_split_folder.setText(d)
+            if not self.edit_detect_prefix.text().strip():
+                self.edit_detect_prefix.setText(self.edit_prefix.text().strip())
+            if not self.edit_detect_suffix.text().strip():
+                self.edit_detect_suffix.setText(self.edit_suffix.text().strip())
+            self.scan_split_folder()
+
+    def scan_split_folder(self):
+        folder = self.edit_split_folder.text().strip()
+        if not folder:
+            InfoBar.warning("Perhatian", "Pilih folder hasil split dulu.", parent=self, duration=3000, position=InfoBarPosition.TOP)
+            return
+        try:
+            results = discover_split_results_from_folder(Path(folder), self.edit_detect_prefix.text().strip(), self.edit_detect_suffix.text().strip())
+            self.current_split_results = results
+            self.refresh_mail_merge_summary()
+            self.update_mail_attachment_options()
+            self.log(f"Loaded {len(results)} split file(s) from folder.")
+            self.save_settings()
+            InfoBar.success("Mail Merge", f"Loaded {len(results)} split file(s).", parent=self, duration=4000, position=InfoBarPosition.TOP)
+        except Exception as e:
+            InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
 
     def update_mail_attachment_options(self):
         has_excel = any(result.excel_path for result in self.current_split_results)
@@ -1639,7 +1696,7 @@ class SplitApp(QWidget):
         self.cmb_key.currentTextChanged.connect(self.update_filename_preview)
         self.cmb_sheet.currentTextChanged.connect(lambda *_: self.load_headers(silent=True))
 
-        for edit in [self.edit_recipient_path, self.edit_mail_subject, self.edit_mail_html_template]:
+        for edit in [self.edit_recipient_path, self.edit_mail_subject, self.edit_mail_html_template, self.edit_split_folder, self.edit_detect_prefix, self.edit_detect_suffix]:
             edit.editingFinished.connect(self.save_settings)
         self.edit_mail_body.textChanged.connect(self.save_settings)
         for combo in [
@@ -1704,6 +1761,9 @@ class SplitApp(QWidget):
         self.settings.setValue("mail_delay_minutes", self.spin_delay_minutes.value())
         self.settings.setValue("mail_throttle", self.chk_throttle.isChecked())
         self.settings.setValue("mail_throttle_seconds", self.spin_throttle_seconds.value())
+        self.settings.setValue("mail_split_folder", self.edit_split_folder.text().strip())
+        self.settings.setValue("mail_detect_prefix", self.edit_detect_prefix.text().strip())
+        self.settings.setValue("mail_detect_suffix", self.edit_detect_suffix.text().strip())
         self.settings.sync()
         self.update_workflow_status()
 
@@ -1740,6 +1800,9 @@ class SplitApp(QWidget):
             self.spin_delay_minutes.setValue(int(self.settings.value("mail_delay_minutes", 5)))
             self.chk_throttle.setChecked(self._settings_bool("mail_throttle", True))
             self.spin_throttle_seconds.setValue(int(self.settings.value("mail_throttle_seconds", 5)))
+            self.edit_split_folder.setText(self.settings.value("mail_split_folder", ""))
+            self.edit_detect_prefix.setText(self.settings.value("mail_detect_prefix", ""))
+            self.edit_detect_suffix.setText(self.settings.value("mail_detect_suffix", ""))
 
             sheet = self.settings.value("sheet_name", "")
             if sheet:
@@ -1826,6 +1889,9 @@ class SplitApp(QWidget):
             self.edit_mail_subject.clear()
             self.edit_mail_body.clear()
             self.edit_mail_html_template.clear()
+            self.edit_split_folder.clear()
+            self.edit_detect_prefix.clear()
+            self.edit_detect_suffix.clear()
             self.chk_attach_excel.setChecked(True)
             self.chk_attach_pdf.setChecked(False)
             self.chk_delay_delivery.setChecked(True)

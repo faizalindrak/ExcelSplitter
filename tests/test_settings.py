@@ -109,6 +109,24 @@ class SettingsTests(unittest.TestCase):
             self.assertFalse(second.chk_throttle.isChecked())
             self.assertEqual(second.spin_throttle_seconds.value(), 4)
 
+    def test_mail_split_folder_settings_persist_with_qsettings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.ini"
+            first = main.SplitApp(settings=self.make_settings(settings_path))
+            self.addCleanup(first.deleteLater)
+
+            first.edit_split_folder.setText("C:/out")
+            first.edit_detect_prefix.setText("Report")
+            first.edit_detect_suffix.setText("Final")
+            first.save_settings()
+
+            second = main.SplitApp(settings=QSettings(str(settings_path), QSettings.IniFormat))
+            self.addCleanup(second.deleteLater)
+
+            self.assertEqual(second.edit_split_folder.text(), "C:/out")
+            self.assertEqual(second.edit_detect_prefix.text(), "Report")
+            self.assertEqual(second.edit_detect_suffix.text(), "Final")
+
 
 if __name__ == "__main__":
     unittest.main()
