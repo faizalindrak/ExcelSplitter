@@ -48,6 +48,14 @@ class UISmokeTests(unittest.TestCase):
             ]
             self.assertEqual(modes, ["Use Template File", "Use Source as Template"])
 
+    def test_split_app_sets_window_and_application_icon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertFalse(window.windowIcon().isNull())
+            self.assertFalse(self.app.windowIcon().isNull())
+
     def test_split_app_uses_compact_dashboard_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
             window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))

@@ -45,7 +45,7 @@ def collect_runtime_submodules(package):
 
 
 # Kumpulkan data & modul tambahan dari paket pihak-3
-datas  = []
+datas  = [("excel-split.ico", ".")] if os.path.exists("excel-split.ico") else []
 binaries = []
 hiddenimports = []
 

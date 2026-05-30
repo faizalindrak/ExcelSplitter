@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from PySide6.QtCore import Qt, Signal, QThread, QSettings, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QGridLayout, QSizePolicy
@@ -61,6 +62,8 @@ OUTPUT_TYPE_LABELS = {
     OUTPUT_TYPE_EXCEL_AND_PDF: "Excel + PDF",
 }
 OUTPUT_TYPE_BY_LABEL = {label: key for key, label in OUTPUT_TYPE_LABELS.items()}
+APP_ICON_FILE = "excel-split.ico"
+APP_USER_MODEL_ID = "Faizalindrak.ExcelSplitter.1.0"
 PATH_FIELD_WIDTH = 460
 SECONDARY_PATH_FIELD_WIDTH = 320
 COMBO_FIELD_WIDTH = 190
@@ -89,6 +92,30 @@ except Exception:
 
 
 # ----------------- Helpers -----------------
+
+def resource_path(relative_path: str) -> Path:
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base_path / relative_path
+
+def app_icon() -> QIcon:
+    icon_path = resource_path(APP_ICON_FILE)
+    return QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+
+def configure_windows_app_identity():
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:
+        pass
+
+def configure_application_icon(app: QApplication | None) -> QIcon:
+    configure_windows_app_identity()
+    icon = app_icon()
+    if app is not None and not icon.isNull():
+        app.setWindowIcon(icon)
+    return icon
 
 def safe_file_part(s: str) -> str:
     s = "" if s is None else str(s)
@@ -989,6 +1016,9 @@ class SplitApp(QWidget):
     def __init__(self, settings=None):
         super().__init__()
         self.setWindowTitle("Excel Splitter")
+        icon = configure_application_icon(QApplication.instance())
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.setObjectName("appRoot")
         self.resize(1000, 750)
         setTheme(Theme.AUTO)
@@ -2572,7 +2602,9 @@ class SplitApp(QWidget):
         InfoBar.error("Error", error_msg, parent=self, duration=8000, position=InfoBarPosition.TOP)
 
 if __name__ == "__main__":
+    configure_windows_app_identity()
     app = QApplication(sys.argv)
+    configure_application_icon(app)
     window = SplitApp()
     window.show()
     sys.exit(app.exec())

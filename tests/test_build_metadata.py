@@ -69,6 +69,13 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertIn("dist/ExcelSplitter.exe", text)
         self.assertNotIn("dist/ExcelSplitter/ExcelSplitter.exe", text)
 
+    def test_pyinstaller_spec_embeds_and_bundles_app_icon(self):
+        text = read_text("main.spec")
+
+        self.assertIn('ICON_PATH    = "excel-split.ico"', text)
+        self.assertIn('("excel-split.ico", ".")', text)
+        self.assertIn("icon=ICON_PATH", text)
+
     def test_spec_does_not_include_invalid_hidden_imports(self):
         text = read_text("main.spec")
 
