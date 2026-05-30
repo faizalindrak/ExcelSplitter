@@ -9,13 +9,14 @@ import shutil
 import subprocess
 import sys
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from PySide6.QtCore import Qt, Signal, QThread, QSettings
+from PySide6.QtCore import Qt, Signal, QThread, QSettings, QTimer
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QGridLayout, QSizePolicy
@@ -131,6 +132,32 @@ def normalize_header(value) -> str:
     value = "" if value is None else str(value)
     return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
 
+def resolve_header_label(columns, label):
+    exact_matches = [column for column in columns if column == label]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        raise ValueError(f"Header kolom ambigu: {label}")
+
+    label_text = str(label)
+    display_matches = [column for column in columns if str(column) == label_text]
+    if len(display_matches) == 1:
+        return display_matches[0]
+    if len(display_matches) > 1:
+        raise ValueError(f"Header kolom ambigu: {label_text}")
+
+    return None
+
+def find_duplicate_headers(headers) -> list[str]:
+    seen = set()
+    duplicates = []
+    for header in headers:
+        header_text = str(header)
+        if header_text in seen and header_text not in duplicates:
+            duplicates.append(header_text)
+        seen.add(header_text)
+    return duplicates
+
 def auto_map_columns(template_headers, source_headers):
     source_by_key = {}
     for source in source_headers:
@@ -155,25 +182,24 @@ def read_excel_headers(path: Path, sheet_name: str, header_rows: int) -> list[st
     df = pd.read_excel(path, sheet_name=sheet_name, header=header_rows - 1, nrows=0)
     return [str(col) for col in df.columns]
 
-def read_template_headers(path: Path, header_rows: int) -> tuple[list[str], int]:
+def read_template_header_cells(path: Path, header_rows: int) -> tuple[list[tuple[str, int]], int]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         ws = wb.active
-        headers, col_idx, empty_streak = [], 1, 0
-        first_col = None
-        while col_idx <= 500 and empty_streak < 5:
+        headers = []
+        max_col = min(ws.max_column or 1, 500)
+        for col_idx in range(1, max_col + 1):
             value = ws.cell(row=header_rows, column=col_idx).value
-            if value is None or str(value).strip() == "":
-                empty_streak += 1
-            else:
-                if first_col is None:
-                    first_col = col_idx
-                headers.append(str(value).strip())
-                empty_streak = 0
-            col_idx += 1
-        return headers, first_col or 1
+            if value is not None and str(value).strip() != "":
+                headers.append((str(value).strip(), col_idx))
+        first_col = headers[0][1] if headers else 1
+        return headers, first_col
     finally:
         wb.close()
+
+def read_template_headers(path: Path, header_rows: int) -> tuple[list[str], int]:
+    header_cells, first_col = read_template_header_cells(path, header_rows)
+    return [header for header, _ in header_cells], first_col
 
 def detect_excel_header_row(path: Path, sheet_name: str | None = None, max_rows: int = 20) -> int:
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -598,9 +624,10 @@ def split_excel_with_template(
             raise ValueError("Index kolom kunci di luar jangkauan DataFrame.")
         key_series = df.iloc[:, key_col - 1]
     else:
-        if key_col not in df.columns:
+        resolved_key_col = resolve_header_label(df.columns, key_col)
+        if resolved_key_col is None:
             raise ValueError(f"Header kolom kunci '{key_col}' tidak ditemukan.")
-        key_series = df[key_col]
+        key_series = df[resolved_key_col]
 
     # Debug: Check for categorical data issues
     status_cb(f"Debug: Key column '{key_col}' data type: {key_series.dtype}")
@@ -626,10 +653,22 @@ def split_excel_with_template(
     # Selaraskan urutan kolom ke header template.
     templ_cols = None
     templ_col_start = 1
+    template_column_indices = []
     if template_mode == TEMPLATE_MODE_TEMPLATE_FILE:
-        templ_cols, templ_col_start = read_template_headers(template_path, template_header_rows)
+        template_header_cells, templ_col_start = read_template_header_cells(
+            template_path,
+            template_header_rows,
+        )
+        templ_cols = [header for header, _ in template_header_cells]
+        template_column_indices = [col_idx for _, col_idx in template_header_cells]
         if not templ_cols:
             raise ValueError("Header template tidak ditemukan untuk mapping kolom.")
+        duplicate_template_headers = find_duplicate_headers(templ_cols)
+        if duplicate_template_headers:
+            raise ValueError(
+                "Header template duplikat tidak didukung untuk mapping kolom: "
+                + ", ".join(duplicate_template_headers)
+            )
 
         source_headers = [str(col) for col in df.columns]
         effective_mapping = column_mapping or auto_map_columns(templ_cols, source_headers)
@@ -637,15 +676,17 @@ def split_excel_with_template(
         if missing:
             raise ValueError("Mapping kolom template belum lengkap: " + ", ".join(missing))
 
-        mapped_data = {}
+        mapped_series = []
         for template_col in templ_cols:
             source_col = effective_mapping[template_col]
-            if source_col not in df.columns:
+            resolved_source_col = resolve_header_label(df.columns, source_col)
+            if resolved_source_col is None:
                 raise ValueError(
                     f"Kolom sumber untuk template '{template_col}' tidak ditemukan: {source_col}"
                 )
-            mapped_data[template_col] = df[source_col]
-        df = pd.DataFrame(mapped_data, index=df.index)
+            mapped_series.append(df[resolved_source_col].rename(template_col))
+        df = pd.concat(mapped_series, axis=1)
+        df.columns = templ_cols
 
     # Debug: Check groupby operation
     status_cb("Debug: Starting groupby operation...")
@@ -789,7 +830,10 @@ def split_excel_with_template(
             # If cleanup fails, continue anyway
             pass
 
-        values = group.fillna("").values.tolist()
+        values = [
+            ["" if pd.isna(value) else value for value in row]
+            for row in group.itertuples(index=False, name=None)
+        ]
 
         # Copy formatting from template row to data rows
         # Use the first data row from template as formatting template
@@ -798,12 +842,12 @@ def split_excel_with_template(
         for r_off, row_vals in enumerate(values, start=0):
             row_idx = start_row + r_off
 
-            for c_idx, v in enumerate(row_vals, start=templ_col_start):
+            for c_idx, v in zip(template_column_indices, row_vals):
                 ws.cell(row=row_idx, column=c_idx, value=v)
 
             if r_off > 0:
                 try:
-                    for col_idx in range(templ_col_start, templ_col_start + len(row_vals)):
+                    for col_idx in template_column_indices:
                         template_cell = ws.cell(row=template_row, column=col_idx)
                         current_cell = ws.cell(row=row_idx, column=col_idx)
 
@@ -821,7 +865,7 @@ def split_excel_with_template(
                     pass
 
         last_data_row = start_row + len(values) - 1
-        last_col = templ_col_start + group.shape[1] - 1
+        last_col = max(template_column_indices, default=templ_col_start)
         set_print_titles_and_area(ws, template_header_rows, max(1, last_col), last_data_row)
 
         # Build filename with prefix and suffix
@@ -869,6 +913,22 @@ class SplitWorker(QThread):
         super().__init__()
         self.params = params
         self.results = []
+        self._last_status_emit = 0.0
+        self._last_progress_emit = 0.0
+
+    def emit_status(self, message):
+        now = time.monotonic()
+        important = not str(message).startswith("Proses [") or "Selesai" in str(message)
+        if important or now - self._last_status_emit >= 0.25:
+            self._last_status_emit = now
+            self.status.emit(str(message))
+
+    def emit_progress(self, total, current):
+        now = time.monotonic()
+        final = total <= 0 or current <= 0 or current >= total
+        if final or now - self._last_progress_emit >= 0.05:
+            self._last_progress_emit = now
+            self.progress.emit(total, current)
 
     def run(self):
         try:
@@ -888,8 +948,8 @@ class SplitWorker(QThread):
                 source_header_rows=self.params.get('source_header_rows'),
                 template_header_rows=self.params.get('template_header_rows'),
                 output_file_type=self.params.get('output_file_type'),
-                status_cb=self.status.emit,
-                progress_cb=lambda t, c: self.progress.emit(t, c)
+                status_cb=self.emit_status,
+                progress_cb=self.emit_progress
             )
             self.finished.emit()
         except Exception as e:
@@ -945,14 +1005,20 @@ class SplitApp(QWidget):
         self.template_col_start = 1
         self.mapping_combos = {}
         self.mapping_status_labels = {}
+        self.last_mapping_missing = []
         self.field_action_buttons = []
         self.current_split_results = []
         self.current_mail_jobs = []
         self.current_mail_warnings = []
         self.current_preview_index = 0
         self.mail_worker = None
+        self.pending_log_messages = []
 
         self._build_ui()
+        self.log_flush_timer = QTimer(self)
+        self.log_flush_timer.setSingleShot(True)
+        self.log_flush_timer.setInterval(100)
+        self.log_flush_timer.timeout.connect(self.flush_pending_logs)
         self.load_settings()
         self._connect_settings_signals()
 
@@ -1198,7 +1264,7 @@ class SplitApp(QWidget):
 
         row = QHBoxLayout()
         self.btn_auto_map = PushButton("Auto Map")
-        self.btn_auto_map.clicked.connect(lambda: self.refresh_template_mapping(auto=True))
+        self.btn_auto_map.clicked.connect(lambda: self.refresh_template_mapping(auto=True, notify_missing=True))
         self.lbl_mapping_status = CaptionLabel("Map template columns to source columns.")
         row.addWidget(self.btn_auto_map)
         row.addWidget(self.lbl_mapping_status)
@@ -1468,7 +1534,19 @@ class SplitApp(QWidget):
         self.refresh_mail_merge_summary()
         self.update_mail_attachment_options()
         self.mail_merge_card.setVisible(True)
+        self.scroll_area.ensureWidgetVisible(self.mail_merge_card)
+        self.mail_merge_card.setFocus(Qt.OtherFocusReason)
         self.update_mail_merge_entry_state()
+
+    def load_current_output_for_mail_merge(self):
+        out_dir = self.edit_outdir.text().strip()
+        if out_dir:
+            self.edit_split_folder.setText(out_dir)
+        self.edit_detect_prefix.setText(self.edit_prefix.text().strip())
+        self.edit_detect_suffix.setText(self.edit_suffix.text().strip())
+        self.refresh_mail_merge_summary()
+        self.update_mail_attachment_options()
+        self.save_settings()
 
     def browse_split_folder(self):
         d = QFileDialog.getExistingDirectory(self, "Pilih folder hasil split", "")
@@ -1650,7 +1728,16 @@ class SplitApp(QWidget):
         layout.addWidget(self.btn_debug)
         layout.addStretch()
     def log(self, msg):
-        self.txt_log.append(msg)
+        self.pending_log_messages.append(str(msg))
+        if hasattr(self, "log_flush_timer") and not self.log_flush_timer.isActive():
+            self.log_flush_timer.start()
+
+    def flush_pending_logs(self):
+        if not self.pending_log_messages:
+            return
+        messages = self.pending_log_messages
+        self.pending_log_messages = []
+        self.txt_log.append("\n".join(messages))
 
     def set_progress(self, total, current):
         if self.is_running:
@@ -1992,11 +2079,34 @@ class SplitApp(QWidget):
         self.mapping_combos = {}
         self.mapping_status_labels = {}
 
+    def _set_mapping_status_label(self, label, mapped):
+        label.setText("Mapped" if mapped else "Missing")
+        label.setStyleSheet("" if mapped else "color: #d93025; font-weight: 600;")
+
+    def update_mapping_summary(self, mapping=None):
+        if not self.template_headers:
+            self.last_mapping_missing = []
+            self.lbl_mapping_status.setText("Map template columns to source columns.")
+            self.lbl_mapping_status.setStyleSheet("")
+            return []
+
+        mapping = mapping if mapping is not None else self.collect_column_mapping()
+        missing = validate_column_mapping(self.template_headers, mapping)
+        self.last_mapping_missing = missing
+        if missing:
+            self.lbl_mapping_status.setText("Lengkapi mapping kolom: " + ", ".join(missing))
+            self.lbl_mapping_status.setStyleSheet("color: #d93025; font-weight: 600;")
+        else:
+            self.lbl_mapping_status.setText("All template columns are mapped.")
+            self.lbl_mapping_status.setStyleSheet("")
+        return missing
+
     def render_mapping_rows(self, mapping=None):
         self._clear_mapping_rows()
         mapping = mapping or {}
         if not self.template_headers:
             self.mapping_rows_layout.addWidget(CaptionLabel("No template headers loaded."))
+            self.update_mapping_summary({})
             return
 
         source_choices = [""] + self.source_headers
@@ -2014,10 +2124,12 @@ class SplitApp(QWidget):
                 idx = combo.findText(selected)
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
-            status = CaptionLabel("Mapped" if combo.currentText().strip() else "Missing")
+            status = CaptionLabel()
+            self._set_mapping_status_label(status, bool(combo.currentText().strip()))
 
             def on_mapping_changed(value, label=status):
-                label.setText("Mapped" if value.strip() else "Missing")
+                self._set_mapping_status_label(label, bool(value.strip()))
+                self.update_mapping_summary()
                 self.save_settings()
 
             combo.currentTextChanged.connect(on_mapping_changed)
@@ -2027,6 +2139,7 @@ class SplitApp(QWidget):
             self.mapping_rows_layout.addWidget(row_widget)
             self.mapping_combos[template_header] = combo
             self.mapping_status_labels[template_header] = status
+        self.update_mapping_summary(mapping)
 
     def collect_column_mapping(self):
         return {
@@ -2035,7 +2148,7 @@ class SplitApp(QWidget):
             if combo.currentText().strip()
         }
 
-    def refresh_template_mapping(self, auto=True):
+    def refresh_template_mapping(self, auto=True, notify_missing=False):
         if self.current_template_mode() != TEMPLATE_MODE_TEMPLATE_FILE:
             self.mapping_card.setVisible(False)
             return
@@ -2069,6 +2182,15 @@ class SplitApp(QWidget):
                 mapping = self.collect_column_mapping()
             self.saved_column_mapping = {k: v for k, v in mapping.items() if v}
             self.render_mapping_rows(mapping)
+            missing = self.update_mapping_summary(mapping)
+            if missing and notify_missing:
+                InfoBar.warning(
+                    "Mapping",
+                    "Lengkapi mapping kolom: " + ", ".join(missing),
+                    parent=self,
+                    duration=8000,
+                    position=InfoBarPosition.TOP,
+                )
         except Exception as e:
             self.log(f"Mapping error: {e}")
             self.template_headers = []
@@ -2115,7 +2237,7 @@ class SplitApp(QWidget):
             self.edit_template.setText(f)
             self.log(f"Template: {f}")
             self.detect_template_header(silent=True)
-            self.refresh_template_mapping(auto=True)
+            self.refresh_template_mapping(auto=True, notify_missing=True)
             self.update_workflow_status()
 
     def browse_outdir(self):
@@ -2261,20 +2383,25 @@ class SplitApp(QWidget):
                 InfoBar.warning("Perhatian", "Pastikan source & sheet sudah dipilih.", parent=self, duration=3000, position=InfoBarPosition.TOP)
             return
         try:
+            previous_key = self.cmb_key.currentText().strip()
             header_row_idx = self.spin_source_header_rows.value() - 1
             df = pd.read_excel(src, sheet_name=sheet, header=header_row_idx, nrows=0)
             headers = list(df.columns.astype(str))
             self.source_headers = headers
             index_vals = [str(i+1) for i in range(len(headers))]
-            values = headers + index_vals
+            values = [""] + headers + index_vals
+            was_blocked = self.cmb_key.blockSignals(True)
             self.cmb_key.clear()
             self.cmb_key.addItems(values)
-            if headers:
-                self.cmb_key.setCurrentIndex(0)
+            key_to_select = previous_key if previous_key in values else ""
+            key_idx = self.cmb_key.findText(key_to_select)
+            self.cmb_key.setCurrentIndex(key_idx if key_idx >= 0 else 0)
+            self.cmb_key.blockSignals(was_blocked)
             self.log(f"Headers loaded: {headers}")
             self.refresh_template_mapping(auto=True)
             self.update_workflow_status()
             self.update_filename_preview()
+            self.save_settings()
         except Exception as e:
             if not silent:
                 InfoBar.error("Error", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
@@ -2427,6 +2554,7 @@ class SplitApp(QWidget):
         self.set_busy(False)
         self.log("Selesai.")
         self.current_split_results = list(getattr(self.worker, "results", []))
+        self.load_current_output_for_mail_merge()
         self.update_mail_merge_entry_state()
         self.btn_open_output.setVisible(True)
         if (
@@ -2434,11 +2562,13 @@ class SplitApp(QWidget):
             and self.cmb_pdf_engine.currentText().strip().lower() == "xlwings"
         ):
             cleanup_excel_com()
+        self.flush_pending_logs()
         InfoBar.success("Selesai", "Proses selesai.", parent=self, duration=5000, position=InfoBarPosition.TOP)
 
     def _on_worker_error(self, error_msg):
         self.set_busy(False)
         self.log(f"Error: {error_msg}")
+        self.flush_pending_logs()
         InfoBar.error("Error", error_msg, parent=self, duration=8000, position=InfoBarPosition.TOP)
 
 if __name__ == "__main__":

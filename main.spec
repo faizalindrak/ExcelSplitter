@@ -19,7 +19,7 @@ import os
 APP_NAME     = "ExcelSplitter"
 APP_VERSION  = "1.0.0"
 ENTRY_SCRIPT = "main.py"
-ICON_PATH    = None   # contoh: "app.ico"  (atau None jika tidak pakai)
+ICON_PATH    = "excel-split.ico"
 CONSOLE      = False  # GUI app
 UPX          = True   # butuh UPX terpasang agar efektif, kalau tidak ada tetap aman
 # version_info.txt menanamkan metadata versi (1.0.0) ke exe Windows.

@@ -1,4 +1,5 @@
 from contextlib import redirect_stdout
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 import tempfile
@@ -142,6 +143,148 @@ class TemplateFileSplitTests(unittest.TestCase):
             self.assertEqual(ws["B4"].value, "A")
             self.assertEqual(ws["A5"].value, "Ana")
             self.assertEqual(ws["B5"].value, "A")
+
+    def test_template_file_mode_maps_date_headers_read_as_datetime_objects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+            date_header = datetime(2026, 6, 1)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", date_header])
+            ws.append(["A", 10])
+            ws.append(["B", 20])
+            ws.append(["A", 30])
+            wb.save(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws.append(["Dept", date_header])
+            wb.save(template)
+
+            main.split_excel_with_template(
+                source,
+                "Data",
+                "Dept",
+                template,
+                out_dir,
+                1,
+                pdf_engine="none",
+                template_mode="template_file",
+            )
+
+            wb = load_workbook(out_dir / "A.xlsx", data_only=True)
+            ws = wb.active
+            self.assertEqual(ws["B1"].value, date_header)
+            self.assertEqual(ws["B2"].value, 10)
+            self.assertEqual(ws["B3"].value, 30)
+
+    def test_template_file_mode_accepts_date_key_column_selected_by_display_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+            date_header = datetime(2026, 6, 1)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append([date_header, "Name"])
+            ws.append(["A", "Alice"])
+            ws.append(["B", "Bob"])
+            ws.append(["A", "Ana"])
+            wb.save(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws.append(["Name"])
+            wb.save(template)
+
+            main.split_excel_with_template(
+                source,
+                "Data",
+                str(date_header),
+                template,
+                out_dir,
+                1,
+                pdf_engine="none",
+                template_mode="template_file",
+                column_mapping={"Name": "Name"},
+            )
+
+            wb = load_workbook(out_dir / "A.xlsx", data_only=True)
+            ws = wb.active
+            self.assertEqual(ws["A2"].value, "Alice")
+            self.assertEqual(ws["A3"].value, "Ana")
+
+    def test_template_file_mode_rejects_duplicate_template_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws.append(["Name", "Name"])
+            wb.save(template)
+
+            with self.assertRaisesRegex(ValueError, "Header template duplikat"):
+                main.split_excel_with_template(
+                    source,
+                    "Data",
+                    "Dept",
+                    template,
+                    out_dir,
+                    1,
+                    pdf_engine="none",
+                    template_mode="template_file",
+                    column_mapping={"Name": "Name"},
+                )
+
+    def test_template_file_mode_preserves_blank_hidden_template_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws["A1"] = "Worker"
+            ws["C1"] = "Team"
+            ws.column_dimensions["B"].hidden = True
+            wb.save(template)
+
+            main.split_excel_with_template(
+                source,
+                "Data",
+                "Dept",
+                template,
+                out_dir,
+                1,
+                pdf_engine="none",
+                template_mode="template_file",
+                column_mapping={"Worker": "Name", "Team": "Dept"},
+            )
+
+            wb = load_workbook(out_dir / "A.xlsx", data_only=True)
+            ws = wb.active
+            self.assertEqual(ws["A2"].value, "Alice")
+            self.assertIsNone(ws["B2"].value)
+            self.assertTrue(ws.column_dimensions["B"].hidden)
+            self.assertEqual(ws["C2"].value, "A")
 
     def test_template_file_mode_requires_complete_manual_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:

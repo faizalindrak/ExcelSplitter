@@ -92,12 +92,49 @@ class UISmokeTests(unittest.TestCase):
 
             self.assertTrue(hasattr(window, "mapping_status_labels"))
             self.assertEqual(window.mapping_status_labels["Worker"].text(), "Missing")
+            self.assertIn("#d93025", window.mapping_status_labels["Worker"].styleSheet())
 
             window.mapping_combos["Worker"].setCurrentIndex(
                 window.mapping_combos["Worker"].findText("Name")
             )
 
             self.assertEqual(window.mapping_status_labels["Worker"].text(), "Mapped")
+            self.assertNotIn("#d93025", window.mapping_status_labels["Worker"].styleSheet())
+
+    def test_auto_map_records_missing_mapping_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Template"
+            ws.append(["Worker", "Team"])
+            wb.save(template)
+
+            window = main.SplitApp(settings=self.make_settings(tmp_path / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.edit_source.setText(str(source))
+            window.cmb_sheet.clear()
+            window.cmb_sheet.addItem("Data")
+            window.spin_source_header_rows.setValue(1)
+            window.edit_template.setText(str(template))
+            window.spin_template_header_rows.setValue(1)
+
+            window.refresh_template_mapping(auto=True, notify_missing=True)
+
+            self.assertEqual(window.last_mapping_missing, ["Worker", "Team"])
+            self.assertIn("Lengkapi mapping kolom", window.lbl_mapping_status.text())
+            self.assertEqual(window.mapping_status_labels["Worker"].text(), "Missing")
+            self.assertIn("#d93025", window.mapping_status_labels["Worker"].styleSheet())
 
     def test_dashboard_uses_native_theme_mode_with_matching_surfaces(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,7 +247,32 @@ class UISmokeTests(unittest.TestCase):
                 window.cmb_key.itemText(index)
                 for index in range(window.cmb_key.count())
             ]
-            self.assertEqual(key_values, ["Dept", "Name", "1", "2"])
+            self.assertEqual(key_values, ["", "Dept", "Name", "1", "2"])
+            self.assertEqual(window.cmb_key.currentText(), "")
+
+    def test_refresh_source_options_restores_saved_key_column_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            wb.save(source)
+
+            settings = self.make_settings(tmp_path / "settings.ini")
+            settings.setValue("source_path", str(source))
+            settings.setValue("sheet_name", "Data")
+            settings.setValue("key_col", "Name")
+            settings.setValue("source_header_rows", 1)
+
+            window = main.SplitApp(settings=settings)
+            self.addCleanup(window.deleteLater)
+
+            window.refresh_source_options()
+
+            self.assertEqual(window.cmb_key.currentText(), "Name")
 
     def test_template_header_row_sits_in_template_workbook_row(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,6 +323,18 @@ class UISmokeTests(unittest.TestCase):
 
             self.assertFalse(window.mail_merge_card.isHidden())
             self.assertIn("1 split file", window.lbl_mail_merge_summary.text())
+
+    def test_show_mail_merge_panel_scrolls_to_mail_merge_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            calls = []
+
+            window.scroll_area.ensureWidgetVisible = lambda widget: calls.append(widget)
+
+            window.show_mail_merge_panel()
+
+            self.assertEqual(calls[-1], window.mail_merge_card)
 
     def test_mail_merge_recipient_controls_exist(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -389,6 +463,52 @@ class UISmokeTests(unittest.TestCase):
             self.assertEqual(result_a.output_file_type, main.OUTPUT_TYPE_EXCEL_AND_PDF)
             
             self.assertIn("2 split files", window.lbl_mail_merge_summary.text())
+
+    def test_worker_finished_loads_output_folder_for_mail_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            output = tmp_path / "out"
+            output.mkdir()
+            excel_a = output / "Report A Final.xlsx"
+            Workbook().save(excel_a)
+
+            window = main.SplitApp(settings=self.make_settings(tmp_path / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.edit_outdir.setText(str(output))
+            window.edit_prefix.setText("Report")
+            window.edit_suffix.setText("Final")
+            window.worker = type("FakeWorker", (), {
+                "results": [
+                    main.SplitResult(
+                        key="A",
+                        excel_path=excel_a,
+                        output_file_type=main.OUTPUT_TYPE_EXCEL,
+                    )
+                ]
+            })()
+
+            window._on_worker_finished()
+
+            self.assertEqual(window.edit_split_folder.text(), str(output))
+            self.assertEqual(window.edit_detect_prefix.text(), "Report")
+            self.assertEqual(window.edit_detect_suffix.text(), "Final")
+            self.assertEqual(len(window.current_split_results), 1)
+            self.assertIn("1 split file", window.lbl_mail_merge_summary.text())
+
+    def test_log_messages_are_buffered_until_flush(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            window.log("first")
+            window.log("second")
+
+            self.assertEqual(window.txt_log.toPlainText(), "")
+
+            window.flush_pending_logs()
+
+            self.assertIn("first", window.txt_log.toPlainText())
+            self.assertIn("second", window.txt_log.toPlainText())
 
 
 if __name__ == "__main__":
