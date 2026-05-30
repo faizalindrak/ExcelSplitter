@@ -5,6 +5,7 @@
 
 import os
 import re
+import io
 import shutil
 import subprocess
 import sys
@@ -208,6 +209,33 @@ def validate_column_mapping(template_headers, mapping):
 def read_excel_headers(path: Path, sheet_name: str, header_rows: int) -> list[str]:
     df = pd.read_excel(path, sheet_name=sheet_name, header=header_rows - 1, nrows=0)
     return [str(col) for col in df.columns]
+
+
+def read_key_values(path: Path, sheet_name: str, key_col, source_header_rows: int) -> list[str]:
+    """Return the ordered, de-duplicated key values (as strings) for a column.
+
+    Order matches groupby(sort=False): first occurrence wins. NaN values are
+    rendered as the string "nan" to match how they appear in grouping/filenames.
+    """
+    df = pd.read_excel(path, sheet_name=sheet_name, header=source_header_rows - 1, dtype=object)
+    if isinstance(key_col, int):
+        if key_col < 1 or key_col > df.shape[1]:
+            raise ValueError("Index kolom kunci di luar jangkauan DataFrame.")
+        key_series = df.iloc[:, key_col - 1]
+    else:
+        resolved_key_col = resolve_header_label(df.columns, key_col)
+        if resolved_key_col is None:
+            raise ValueError(f"Header kolom kunci '{key_col}' tidak ditemukan.")
+        key_series = df[resolved_key_col]
+
+    seen = []
+    seen_set = set()
+    for value in key_series:
+        text = str(value)
+        if text not in seen_set:
+            seen_set.add(text)
+            seen.append(text)
+    return seen
 
 def read_template_header_cells(path: Path, header_rows: int) -> tuple[list[tuple[str, int]], int]:
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -578,10 +606,15 @@ def split_excel_with_template(
     prefix: str = "", suffix: str = "", status_cb=None, progress_cb=None,
     template_mode: str = TEMPLATE_MODE_TEMPLATE_FILE, column_mapping: dict | None = None,
     source_header_rows: int | None = None, template_header_rows: int | None = None,
-    output_file_type: str | None = None
+    output_file_type: str | None = None, selected_keys: set | None = None,
+    stop_requested=None, verbose: bool = False
 ):
     if status_cb is None: status_cb = lambda msg: None
     if progress_cb is None: progress_cb = lambda t, c: None
+    if stop_requested is None: stop_requested = lambda: False
+    def debug(msg):
+        if verbose:
+            status_cb(msg)
     source_header_rows = source_header_rows or header_rows
     template_header_rows = template_header_rows or header_rows
     if output_file_type is None:
@@ -610,39 +643,39 @@ def split_excel_with_template(
     # Diagnostic logging
     try:
         file_size = source_path.stat().st_size if source_path.exists() else 0
-        status_cb(f"Debug: File path: {source_path}")
-        status_cb(f"Debug: File exists: {source_path.exists()}")
-        status_cb(f"Debug: File size: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
-        status_cb(f"Debug: Sheet name: '{sheet_name}'")
-        status_cb("Debug: Starting pd.read_excel...")
+        debug(f"Debug: File path: {source_path}")
+        debug(f"Debug: File exists: {source_path.exists()}")
+        debug(f"Debug: File size: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
+        debug(f"Debug: Sheet name: '{sheet_name}'")
+        debug("Debug: Starting pd.read_excel...")
 
         # Try reading with timeout and error handling
         import time
         start_time = time.time()
 
         # First try to read just the header to test file accessibility
-        status_cb("Debug: Testing file accessibility...")
+        debug("Debug: Testing file accessibility...")
         try:
             df_test = pd.read_excel(source_path, sheet_name=sheet_name, nrows=5, dtype=object)
-            status_cb(f"Debug: Successfully read {len(df_test)} rows for testing")
+            debug(f"Debug: Successfully read {len(df_test)} rows for testing")
         except Exception as test_e:
-            status_cb(f"Debug: Test read failed: {str(test_e)}")
+            debug(f"Debug: Test read failed: {str(test_e)}")
             raise test_e
 
         # Read with header at the correct row (source_header_rows is 1-indexed)
         df = pd.read_excel(source_path, sheet_name=sheet_name, header=source_header_rows - 1, dtype=object)
 
         elapsed = time.time() - start_time
-        status_cb(f"Debug: Successfully read {len(df)} rows in {elapsed:.2f} seconds")
+        debug(f"Debug: Successfully read {len(df)} rows in {elapsed:.2f} seconds")
 
     except FileNotFoundError as e:
-        status_cb(f"Debug: File not found: {e}")
+        debug(f"Debug: File not found: {e}")
         raise FileNotFoundError(f"File tidak ditemukan: {source_path}")
     except PermissionError as e:
-        status_cb(f"Debug: Permission denied: {e}")
+        debug(f"Debug: Permission denied: {e}")
         raise PermissionError(f"Tidak ada akses ke file: {source_path}")
     except Exception as e:
-        status_cb(f"Debug: Error reading Excel: {type(e).__name__}: {str(e)}")
+        debug(f"Debug: Error reading Excel: {type(e).__name__}: {str(e)}")
         raise e
 
     # Tentukan kolom kunci
@@ -657,25 +690,25 @@ def split_excel_with_template(
         key_series = df[resolved_key_col]
 
     # Debug: Check for categorical data issues
-    status_cb(f"Debug: Key column '{key_col}' data type: {key_series.dtype}")
-    status_cb(f"Debug: Key column unique values: {len(key_series.unique())}")
-    status_cb(f"Debug: Key column has null values: {key_series.isnull().sum()}")
+    debug(f"Debug: Key column '{key_col}' data type: {key_series.dtype}")
+    debug(f"Debug: Key column unique values: {len(key_series.unique())}")
+    debug(f"Debug: Key column has null values: {key_series.isnull().sum()}")
 
     # Check for categorical columns in the entire DataFrame
     categorical_cols = []
     for col in df.columns:
         if df[col].dtype.name == 'category':
             categorical_cols.append(col)
-            status_cb(f"Debug: Found categorical column: {col}")
+            debug(f"Debug: Found categorical column: {col}")
 
     if categorical_cols:
-        status_cb(f"Debug: Converting {len(categorical_cols)} categorical columns to string...")
+        debug(f"Debug: Converting {len(categorical_cols)} categorical columns to string...")
         for col in categorical_cols:
             try:
                 df[col] = df[col].astype(str)
-                status_cb(f"Debug: Converted {col} to string")
+                debug(f"Debug: Converted {col} to string")
             except Exception as conv_e:
-                status_cb(f"Debug: Failed to convert {col}: {conv_e}")
+                debug(f"Debug: Failed to convert {col}: {conv_e}")
 
     # Selaraskan urutan kolom ke header template.
     templ_cols = None
@@ -716,56 +749,73 @@ def split_excel_with_template(
         df.columns = templ_cols
 
     # Debug: Check groupby operation
-    status_cb("Debug: Starting groupby operation...")
+    debug("Debug: Starting groupby operation...")
     try:
         groups = df.groupby(key_series, dropna=False, sort=False)
-        total, current = len(groups), 0
-        status_cb(f"Debug: Groupby successful, found {total} groups")
-        progress_cb(total, 0)
+        debug(f"Debug: Groupby successful, found {len(groups)} groups")
     except Exception as groupby_e:
-        status_cb(f"Debug: Groupby error: {type(groupby_e).__name__}: {str(groupby_e)}")
+        debug(f"Debug: Groupby error: {type(groupby_e).__name__}: {str(groupby_e)}")
 
         # Try multiple approaches to fix the issue
         if "categorical" in str(groupby_e).lower():
-            status_cb("Debug: Attempting to fix categorical issue...")
+            debug("Debug: Attempting to fix categorical issue...")
 
             # Method 1: Try converting all categorical columns to object
             try:
-                status_cb("Debug: Method 1 - Converting all categorical columns to object...")
+                debug("Debug: Method 1 - Converting all categorical columns to object...")
                 df_no_cat = df.copy()
                 for col in df_no_cat.columns:
                     if df_no_cat[col].dtype.name == 'category':
                         df_no_cat[col] = df_no_cat[col].astype('object')
                 groups = df_no_cat.groupby(key_series, dropna=False, sort=False)
-                total, current = len(groups), 0
-                status_cb(f"Debug: Method 1 successful, found {total} groups")
-                progress_cb(total, 0)
+                debug(f"Debug: Method 1 successful, found {len(groups)} groups")
                 # Update df to use the fixed version
                 df = df_no_cat
             except Exception as method1_e:
-                status_cb(f"Debug: Method 1 failed: {method1_e}")
+                debug(f"Debug: Method 1 failed: {method1_e}")
 
                 # Method 2: Try using string conversion for groupby
                 try:
-                    status_cb("Debug: Method 2 - Using string keys for groupby...")
+                    debug("Debug: Method 2 - Using string keys for groupby...")
                     string_keys = key_series.astype(str)
                     groups = df.groupby(string_keys, dropna=False, sort=False)
-                    total, current = len(groups), 0
-                    status_cb(f"Debug: Method 2 successful, found {total} groups")
-                    progress_cb(total, 0)
+                    debug(f"Debug: Method 2 successful, found {len(groups)} groups")
                 except Exception as method2_e:
-                    status_cb(f"Debug: Method 2 failed: {method2_e}")
+                    debug(f"Debug: Method 2 failed: {method2_e}")
                     raise groupby_e
         else:
             raise groupby_e
 
-    for key_val, group in groups:
+    # Apply optional key filtering while preserving group order.
+    group_items = [
+        (key_val, group)
+        for key_val, group in groups
+        if selected_keys is None or str(key_val) in selected_keys
+    ]
+    total, current = len(group_items), 0
+    if selected_keys is not None:
+        status_cb(f"Generating {total} of selected key(s).")
+    progress_cb(total, 0)
+
+    # Read the template/source workbook once and reload per key from memory
+    # to avoid repeated disk reads inside the loop.
+    template_bytes = None
+    source_bytes = None
+    if template_mode == TEMPLATE_MODE_TEMPLATE_FILE:
+        template_bytes = template_path.read_bytes()
+    else:
+        source_bytes = source_path.read_bytes()
+
+    for key_val, group in group_items:
+        if stop_requested():
+            status_cb("Dibatalkan.")
+            break
         current += 1
         status_cb(f"Proses [{current}/{total}] key={key_val}")
         progress_cb(total, current)
 
         if template_mode == TEMPLATE_MODE_SOURCE_TEMPLATE:
-            wb = load_workbook(source_path)
+            wb = load_workbook(io.BytesIO(source_bytes))
             if sheet_name not in wb.sheetnames:
                 raise ValueError(f"Sheet sumber '{sheet_name}' tidak ditemukan.")
 
@@ -776,9 +826,18 @@ def split_excel_with_template(
             ws = wb[sheet_name]
             start_row = source_header_rows + 1
             keep_rows = {int(idx) + start_row for idx in group.index}
+            # Delete non-kept data rows in contiguous runs (bottom-up) so each
+            # delete_rows call removes a block instead of a single row.
+            run_end = None
             for row_idx in range(ws.max_row, start_row - 1, -1):
                 if row_idx not in keep_rows:
-                    ws.delete_rows(row_idx)
+                    if run_end is None:
+                        run_end = row_idx
+                elif run_end is not None:
+                    ws.delete_rows(row_idx + 1, run_end - row_idx)
+                    run_end = None
+            if run_end is not None:
+                ws.delete_rows(start_row, run_end - start_row + 1)
 
             set_print_titles_and_area(ws, source_header_rows, ws.max_column, ws.max_row)
 
@@ -805,7 +864,7 @@ def split_excel_with_template(
             continue
 
         # 1) Tulis XLSX dari template
-        wb = load_workbook(template_path)
+        wb = load_workbook(io.BytesIO(template_bytes))
         ws = wb.active
         start_row = template_header_rows + 1
 
@@ -866,6 +925,23 @@ def split_excel_with_template(
         # Use the first data row from template as formatting template
         template_row = start_row  # This should be the first data row in template
 
+        # Capture the template-row style objects once per workbook. Reading a
+        # cell's style returns a StyleProxy, so copy once at capture time into
+        # real style objects; assigning those shared objects to many cells reuses
+        # one style instead of copying per cell.
+        style_src = {}
+        for col_idx in template_column_indices:
+            template_cell = ws.cell(row=template_row, column=col_idx)
+            if template_cell.has_style:
+                style_src[col_idx] = (
+                    template_cell.font.copy(),
+                    template_cell.fill.copy(),
+                    template_cell.border.copy(),
+                    template_cell.alignment.copy(),
+                    template_cell.number_format,
+                    template_cell.protection.copy(),
+                )
+
         for r_off, row_vals in enumerate(values, start=0):
             row_idx = start_row + r_off
 
@@ -875,17 +951,18 @@ def split_excel_with_template(
             if r_off > 0:
                 try:
                     for col_idx in template_column_indices:
-                        template_cell = ws.cell(row=template_row, column=col_idx)
+                        style = style_src.get(col_idx)
+                        if not style:
+                            continue
                         current_cell = ws.cell(row=row_idx, column=col_idx)
-
-                        # Copy all formatting properties
-                        if template_cell.has_style:
-                            current_cell.font = template_cell.font.copy()
-                            current_cell.fill = template_cell.fill.copy()
-                            current_cell.border = template_cell.border.copy()
-                            current_cell.alignment = template_cell.alignment.copy()
-                            current_cell.number_format = template_cell.number_format
-                            current_cell.protection = template_cell.protection.copy()
+                        (
+                            current_cell.font,
+                            current_cell.fill,
+                            current_cell.border,
+                            current_cell.alignment,
+                            current_cell.number_format,
+                            current_cell.protection,
+                        ) = style
 
                 except Exception as format_e:
                     # If formatting copy fails, continue without it
@@ -940,8 +1017,12 @@ class SplitWorker(QThread):
         super().__init__()
         self.params = params
         self.results = []
+        self._cancel_requested = False
         self._last_status_emit = 0.0
         self._last_progress_emit = 0.0
+
+    def cancel(self):
+        self._cancel_requested = True
 
     def emit_status(self, message):
         now = time.monotonic()
@@ -975,6 +1056,9 @@ class SplitWorker(QThread):
                 source_header_rows=self.params.get('source_header_rows'),
                 template_header_rows=self.params.get('template_header_rows'),
                 output_file_type=self.params.get('output_file_type'),
+                selected_keys=self.params.get('selected_keys'),
+                verbose=self.params.get('verbose', False),
+                stop_requested=lambda: self._cancel_requested,
                 status_cb=self.emit_status,
                 progress_cb=self.emit_progress
             )
@@ -1037,6 +1121,7 @@ class SplitApp(QWidget):
         self.mapping_status_labels = {}
         self.last_mapping_missing = []
         self.field_action_buttons = []
+        self.key_checkboxes = []
         self.current_split_results = []
         self.current_mail_jobs = []
         self.current_mail_warnings = []
@@ -1160,6 +1245,7 @@ class SplitApp(QWidget):
         root_layout.addLayout(body, 1)
 
         self._build_source_card()
+        self._build_keys_card()
         self._build_template_card()
         self._build_mapping_card()
         self._build_output_card()
@@ -1246,6 +1332,40 @@ class SplitApp(QWidget):
         layout.addLayout(grid)
 
         self.main_panel_layout.addWidget(card)
+
+    def _build_keys_card(self):
+        self.keys_card, layout = self._panel("Keys", FIF.FILTER)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+        self.btn_load_keys = PushButton("Load Keys")
+        self.btn_load_keys.clicked.connect(self.load_keys)
+        self.btn_select_all_keys = PushButton("Select All")
+        self.btn_select_all_keys.clicked.connect(self.select_all_keys)
+        self.btn_clear_all_keys = PushButton("Clear All")
+        self.btn_clear_all_keys.clicked.connect(self.clear_all_keys)
+        self.lbl_keys_summary = CaptionLabel("Load keys to generate only a subset.")
+        controls.addWidget(self.btn_load_keys)
+        controls.addWidget(self.btn_select_all_keys)
+        controls.addWidget(self.btn_clear_all_keys)
+        controls.addWidget(self.lbl_keys_summary)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        self.keys_scroll = ScrollArea()
+        self.keys_scroll.setObjectName("keysScrollArea")
+        self.keys_scroll.setWidgetResizable(True)
+        self.keys_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.keys_scroll.setMinimumHeight(90)
+        self.keys_scroll.setMaximumHeight(180)
+        self.keys_list_widget = QWidget()
+        self.keys_list_layout = QVBoxLayout(self.keys_list_widget)
+        self.keys_list_layout.setContentsMargins(4, 4, 4, 4)
+        self.keys_list_layout.setSpacing(4)
+        self.keys_scroll.setWidget(self.keys_list_widget)
+        layout.addWidget(self.keys_scroll)
+
+        self.main_panel_layout.addWidget(self.keys_card)
 
     def _build_template_card(self):
         card, layout = self._panel("Template", FIF.EDIT)
@@ -1373,6 +1493,13 @@ class SplitApp(QWidget):
 
     def _build_log_card(self):
         card, layout = self._panel("Log")
+        self.chk_verbose_logging = CheckBox("Verbose logging")
+        self.chk_verbose_logging.setChecked(False)
+        log_options = QHBoxLayout()
+        log_options.setSpacing(10)
+        log_options.addWidget(self.chk_verbose_logging)
+        log_options.addStretch()
+        layout.addLayout(log_options)
         self.txt_log = TextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setMinimumHeight(130)
@@ -1735,10 +1862,15 @@ class SplitApp(QWidget):
         self.btn_generate = PrimaryPushButton(FIF.PLAY, "Generate")
         self.btn_generate.setFixedHeight(38)
         self.btn_generate.clicked.connect(self.on_run_clicked)
+        self.btn_cancel_split = PushButton(FIF.CANCEL, "Cancel")
+        self.btn_cancel_split.setFixedHeight(36)
+        self.btn_cancel_split.clicked.connect(self.cancel_split)
+        self.btn_cancel_split.setVisible(False)
         self.progress_bar = ProgressBar()
         self.progress_bar.setFixedWidth(240)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
+        self.lbl_key_count = CaptionLabel("")
         self.btn_open_output = PushButton(FIF.FOLDER, "Open Output Folder")
         self.btn_open_output.setFixedHeight(36)
         self.btn_open_output.clicked.connect(self.open_output_folder)
@@ -1752,7 +1884,9 @@ class SplitApp(QWidget):
         self.btn_debug.clicked.connect(self.debug_excel)
 
         layout.addWidget(self.btn_generate)
+        layout.addWidget(self.btn_cancel_split)
         layout.addWidget(self.progress_bar)
+        layout.addWidget(self.lbl_key_count)
         layout.addWidget(self.btn_open_output)
         layout.addWidget(self.btn_mail_merge)
         layout.addWidget(self.btn_debug)
@@ -1782,10 +1916,17 @@ class SplitApp(QWidget):
         self.btn_generate.setEnabled(not busy)
         self.btn_generate.setText("Generating..." if busy else "Generate")
         self.btn_reset_settings.setEnabled(not busy)
+        self.btn_cancel_split.setVisible(busy)
         self.progress_bar.setVisible(busy)
         if not busy:
             self.progress_bar.setValue(0)
         self.update_workflow_status()
+
+    def cancel_split(self):
+        if self.worker is not None and self.is_running:
+            self.worker.cancel()
+            self.btn_cancel_split.setEnabled(False)
+            self.log("Membatalkan...")
 
     def _connect_settings_signals(self):
         for edit in [
@@ -1801,6 +1942,7 @@ class SplitApp(QWidget):
 
         for edit in [self.edit_prefix, self.edit_suffix]:
             edit.textChanged.connect(self.update_filename_preview)
+        self.chk_verbose_logging.stateChanged.connect(lambda *_: self.save_settings())
 
         for combo in [
             self.cmb_sheet,
@@ -1861,6 +2003,7 @@ class SplitApp(QWidget):
         self.settings.setValue("libreoffice_path", self.edit_lo_path.text().strip())
         self.settings.setValue("prefix", self.edit_prefix.text().strip())
         self.settings.setValue("suffix", self.edit_suffix.text().strip())
+        self.settings.setValue("verbose_logging", self.chk_verbose_logging.isChecked())
         self.settings.setValue("column_mapping", json.dumps(mapping))
         self.settings.setValue("mail_recipient_path", self.edit_recipient_path.text().strip())
         self.settings.setValue("mail_recipient_sheet", self.cmb_recipient_sheet.currentText().strip())
@@ -1906,6 +2049,7 @@ class SplitApp(QWidget):
             self.edit_lo_path.setText(self.settings.value("libreoffice_path", ""))
             self.edit_prefix.setText(self.settings.value("prefix", ""))
             self.edit_suffix.setText(self.settings.value("suffix", ""))
+            self.chk_verbose_logging.setChecked(self._settings_bool("verbose_logging", False))
             self.edit_recipient_path.setText(self.settings.value("mail_recipient_path", ""))
             self.spin_recipient_header_row.setValue(int(self.settings.value("mail_recipient_header_row", 1)))
             self.edit_mail_subject.setText(self.settings.value("mail_subject", ""))
@@ -2013,6 +2157,7 @@ class SplitApp(QWidget):
             self.chk_attach_pdf.setChecked(False)
             self.chk_delay_delivery.setChecked(True)
             self.chk_throttle.setChecked(True)
+            self.chk_verbose_logging.setChecked(False)
             self.cmb_sheet.clear()
             self.cmb_key.clear()
             self.cmb_recipient_sheet.clear()
@@ -2247,6 +2392,75 @@ class SplitApp(QWidget):
             self.workflow_steps[name].setText("●" if ready else "○")
         missing = [name for name, ready in states.items() if not ready and name != "Run"]
         self.lbl_workflow_status.setText("Ready" if not missing else "Missing: " + ", ".join(missing))
+
+    def _clear_key_rows(self):
+        while self.keys_list_layout.count():
+            item = self.keys_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.key_checkboxes = []
+
+    def load_keys(self):
+        src = self.edit_source.text().strip()
+        sheet = self.cmb_sheet.currentText().strip()
+        key_raw = self.cmb_key.currentText().strip()
+        if not src or not sheet or not key_raw:
+            InfoBar.warning(
+                "Keys",
+                "Pilih source, sheet, dan key column dulu.",
+                parent=self, duration=3000, position=InfoBarPosition.TOP,
+            )
+            return
+        try:
+            key_col = int(key_raw)
+        except ValueError:
+            key_col = key_raw
+        try:
+            values = read_key_values(
+                Path(src), sheet, key_col, self.spin_source_header_rows.value()
+            )
+        except Exception as e:
+            InfoBar.error("Keys", str(e), parent=self, duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        self._clear_key_rows()
+        for value in values:
+            checkbox = CheckBox(value)
+            checkbox.setChecked(True)
+            checkbox.stateChanged.connect(lambda *_: self.update_key_summary())
+            self.keys_list_layout.addWidget(checkbox)
+            self.key_checkboxes.append(checkbox)
+        self.update_key_summary()
+        self.log(f"Loaded {len(values)} key value(s).")
+
+    def select_all_keys(self):
+        for checkbox in self.key_checkboxes:
+            checkbox.setChecked(True)
+        self.update_key_summary()
+
+    def clear_all_keys(self):
+        for checkbox in self.key_checkboxes:
+            checkbox.setChecked(False)
+        self.update_key_summary()
+
+    def update_key_summary(self):
+        total = len(self.key_checkboxes)
+        checked = sum(1 for checkbox in self.key_checkboxes if checkbox.isChecked())
+        if total:
+            self.lbl_keys_summary.setText(f"{checked} / {total} keys selected")
+        else:
+            self.lbl_keys_summary.setText("Load keys to generate only a subset.")
+        if hasattr(self, "lbl_key_count"):
+            self.lbl_key_count.setText(f"{checked} / {total} keys" if total else "")
+
+    def collect_selected_keys(self):
+        if not self.key_checkboxes:
+            return None
+        checked = [cb.text() for cb in self.key_checkboxes if cb.isChecked()]
+        if len(checked) == len(self.key_checkboxes):
+            return None
+        return set(checked)
 
     def browse_source(self):
         f, _ = QFileDialog.getOpenFileName(
@@ -2544,6 +2758,7 @@ class SplitApp(QWidget):
                     return
 
             self.set_busy(True)
+            self.btn_cancel_split.setEnabled(True)
             self.save_settings()
             self.log("Mulai generate...")
 
@@ -2567,7 +2782,13 @@ class SplitApp(QWidget):
                 'suffix': self.edit_suffix.text().strip(),
                 'template_mode': template_mode,
                 'column_mapping': column_mapping,
+                'selected_keys': self.collect_selected_keys(),
+                'verbose': self.chk_verbose_logging.isChecked(),
             }
+
+            selected_keys = params['selected_keys']
+            if selected_keys is not None:
+                self.log(f"Generating only {len(selected_keys)} selected key(s).")
 
             self.worker = SplitWorker(params)
             self.worker.status.connect(self.log)
@@ -2581,8 +2802,8 @@ class SplitApp(QWidget):
             self.set_busy(False)
 
     def _on_worker_finished(self):
+        cancelled = bool(self.worker is not None and getattr(self.worker, "_cancel_requested", False))
         self.set_busy(False)
-        self.log("Selesai.")
         self.current_split_results = list(getattr(self.worker, "results", []))
         self.load_current_output_for_mail_merge()
         self.update_mail_merge_entry_state()
@@ -2593,7 +2814,16 @@ class SplitApp(QWidget):
         ):
             cleanup_excel_com()
         self.flush_pending_logs()
-        InfoBar.success("Selesai", "Proses selesai.", parent=self, duration=5000, position=InfoBarPosition.TOP)
+        if cancelled:
+            self.log("Dibatalkan.")
+            InfoBar.warning(
+                "Dibatalkan",
+                f"Proses dihentikan. {len(self.current_split_results)} file dibuat.",
+                parent=self, duration=5000, position=InfoBarPosition.TOP,
+            )
+        else:
+            self.log("Selesai.")
+            InfoBar.success("Selesai", "Proses selesai.", parent=self, duration=5000, position=InfoBarPosition.TOP)
 
     def _on_worker_error(self, error_msg):
         self.set_busy(False)

@@ -414,6 +414,74 @@ class UISmokeTests(unittest.TestCase):
             self.assertTrue(timing.throttle_enabled)
             self.assertEqual(timing.throttle_seconds, 3)
 
+    def test_split_app_has_cancel_button_hidden_until_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "btn_cancel_split"))
+            self.assertFalse(window.btn_cancel_split.isVisible())
+
+    def test_split_app_has_key_count_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "lbl_key_count"))
+
+    def test_split_app_has_keys_panel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "keys_card"))
+            self.assertTrue(hasattr(window, "btn_load_keys"))
+            self.assertTrue(hasattr(window, "btn_select_all_keys"))
+            self.assertTrue(hasattr(window, "btn_clear_all_keys"))
+
+    def test_selected_keys_subset_passed_to_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Name"])
+            ws.append(["A", "Alice"])
+            ws.append(["B", "Bob"])
+            ws.append(["C", "Cara"])
+            wb.save(source)
+
+            window = main.SplitApp(settings=self.make_settings(tmp_path / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+            window.edit_source.setText(str(source))
+            window.cmb_sheet.clear()
+            window.cmb_sheet.addItem("Data")
+            window.cmb_sheet.setCurrentText("Data")
+            window.cmb_key.clear()
+            window.cmb_key.addItem("Dept")
+            window.cmb_key.setCurrentText("Dept")
+            window.spin_source_header_rows.setValue(1)
+
+            window.load_keys()
+            self.assertEqual(len(window.key_checkboxes), 3)
+            # All checked => no filtering.
+            self.assertIsNone(window.collect_selected_keys())
+
+            # Uncheck "B".
+            for checkbox in window.key_checkboxes:
+                if checkbox.text() == "B":
+                    checkbox.setChecked(False)
+            self.assertEqual(window.collect_selected_keys(), {"A", "C"})
+
+    def test_split_app_has_verbose_toggle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))
+            self.addCleanup(window.deleteLater)
+
+            self.assertTrue(hasattr(window, "chk_verbose_logging"))
+            self.assertFalse(window.chk_verbose_logging.isChecked())
+
     def test_mail_merge_attachment_options_follow_split_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             window = main.SplitApp(settings=self.make_settings(Path(tmp) / "settings.ini"))

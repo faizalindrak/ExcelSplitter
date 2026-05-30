@@ -46,6 +46,7 @@ class SettingsTests(unittest.TestCase):
                 first.cmb_template_mode.findText("Use Source as Template")
             )
             first.cmb_pdf_engine.setCurrentIndex(first.cmb_pdf_engine.findText("libreoffice"))
+            first.chk_verbose_logging.setChecked(True)
             first.source_headers = ["Name"]
             first.template_headers = ["Worker"]
             first.render_mapping_rows({"Worker": "Name"})
@@ -63,6 +64,7 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(second.cmb_output_type.currentText(), "PDF")
             self.assertEqual(second.cmb_template_mode.currentText(), "Use Source as Template")
             self.assertEqual(second.cmb_pdf_engine.currentText(), "libreoffice")
+            self.assertTrue(second.chk_verbose_logging.isChecked())
             self.assertEqual(second.saved_column_mapping, {"Worker": "Name"})
 
     def test_ini_toolbar_buttons_are_replaced_by_reset_settings(self):
