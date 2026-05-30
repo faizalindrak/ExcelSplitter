@@ -489,5 +489,170 @@ class SourceTemplateSplitTests(unittest.TestCase):
             self.assertEqual(results[0].output_file_type, main.OUTPUT_TYPE_EXCEL_AND_PDF)
 
 
+class SplitControlTests(unittest.TestCase):
+    def make_source_workbook(self, path: Path):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        ws.append(["Dept", "Name"])
+        ws.append(["A", "Alice"])
+        ws.append(["B", "Bob"])
+        ws.append(["C", "Cara"])
+        ws.append(["A", "Ana"])
+        wb.save(path)
+
+    def test_selected_keys_limits_generated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            results = main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                selected_keys={"A", "C"},
+            )
+
+            self.assertTrue((out_dir / "A.xlsx").exists())
+            self.assertTrue((out_dir / "C.xlsx").exists())
+            self.assertFalse((out_dir / "B.xlsx").exists())
+            self.assertEqual({result.key for result in results}, {"A", "C"})
+
+    def test_selected_keys_none_generates_all(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            results = main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                selected_keys=None,
+            )
+
+            self.assertEqual({result.key for result in results}, {"A", "B", "C"})
+            self.assertTrue((out_dir / "B.xlsx").exists())
+
+    def test_stop_requested_halts_after_first_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            calls = {"count": 0}
+
+            def stop():
+                # Allow the first iteration, then request stop.
+                should_stop = calls["count"] >= 1
+                calls["count"] += 1
+                return should_stop
+
+            results = main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                stop_requested=stop,
+            )
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].key, "A")
+
+    def test_read_key_values_returns_ordered_unique_strings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.xlsx"
+            self.make_source_workbook(source)
+
+            values = main.read_key_values(source, "Data", "Dept", 1)
+
+            self.assertEqual(values, ["A", "B", "C"])
+
+    def test_debug_messages_suppressed_unless_verbose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            quiet_messages = []
+            main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                status_cb=quiet_messages.append, verbose=False,
+            )
+            self.assertFalse(any(msg.startswith("Debug:") for msg in quiet_messages))
+
+            verbose_messages = []
+            main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                status_cb=verbose_messages.append, verbose=True,
+            )
+            self.assertTrue(any(msg.startswith("Debug:") for msg in verbose_messages))
+
+    def test_source_template_preserves_only_matching_rows_after_optimization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            out_dir = tmp_path / "out"
+            self.make_source_workbook(source)
+
+            main.split_excel_with_template(
+                source, "Data", "Dept", source, out_dir, 1,
+                pdf_engine="none", template_mode="source_template",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+            )
+
+            wb = load_workbook(out_dir / "A.xlsx")
+            ws = wb.active
+            rows = [
+                [cell.value for cell in row]
+                for row in ws.iter_rows(values_only=False)
+            ]
+            self.assertEqual(rows[0], [cell for cell in ["Dept", "Name"]])
+            data_rows = [[r[0], r[1]] for r in rows[1:]]
+            self.assertEqual(data_rows, [["A", "Alice"], ["A", "Ana"]])
+
+    def test_template_file_applies_template_styles_to_data_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "source.xlsx"
+            template = tmp_path / "template.xlsx"
+            out_dir = tmp_path / "out"
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(["Dept", "Amount"])
+            ws.append(["A", 10])
+            ws.append(["A", 20])
+            wb.save(source)
+
+            tpl = Workbook()
+            tws = tpl.active
+            tws.title = "Template"
+            tws.append(["Dept", "Amount"])
+            tws.cell(row=2, column=2).number_format = "#,##0.00"
+            tpl.save(template)
+
+            main.split_excel_with_template(
+                source, "Data", "Dept", template, out_dir, 1,
+                pdf_engine="none", template_mode="template_file",
+                output_file_type=main.OUTPUT_TYPE_EXCEL,
+                column_mapping={"Dept": "Dept", "Amount": "Amount"},
+            )
+
+            out_wb = load_workbook(out_dir / "A.xlsx")
+            out_ws = out_wb.active
+            # Second data row should inherit the template data-row number format.
+            self.assertEqual(out_ws.cell(row=3, column=2).number_format, "#,##0.00")
+
+
 if __name__ == "__main__":
     unittest.main()

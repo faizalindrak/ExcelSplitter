@@ -123,7 +123,20 @@ The `main.spec` file contains build configuration:
    - Header rows count (default: 5)
    - PDF engine (xlwings, libreoffice, or none)
    - LibreOffice path (if using libreoffice PDF engine)
-11. **Generate**: Click "Generate" to start the splitting process
+11. **(Optional) Select Keys**: Click "Load Keys" in the Keys panel to list every unique value in the key column, then check only the values you want to generate. Use "Select All" / "Clear All" to toggle quickly. If all values are checked (or no keys are loaded), every key is generated.
+12. **Generate**: Click "Generate" to start the splitting process. While a run is in progress you can click "Cancel" to stop early; files already created are kept.
+
+### Selective Key Generation
+
+The Keys panel lets you generate output for only a subset of key values instead of every unique value. This is useful for re-running a few specific keys without regenerating the whole set. The footer shows a live "checked / total keys" count.
+
+### Cancelling a Run
+
+A "Cancel" button appears next to "Generate" while a split is running. Cancelling stops processing after the current key finishes, so any files generated up to that point remain on disk and are available for Mail Merge.
+
+### Verbose Logging
+
+The Log panel has a "Verbose logging" toggle (off by default). When off, the log shows only high-level progress and results. Turn it on to see detailed diagnostic `Debug:` messages (file sizes, read timing, groupby diagnostics) when troubleshooting. The setting is remembered between sessions.
 
 ### Input Files
 
@@ -200,8 +213,11 @@ The first sending provider is Microsoft Outlook desktop. Delay delivery sets Out
 
 ### Performance Optimizations
 - Efficient memory usage for large files
+- Template/source workbook is read from disk once per run and reloaded from memory for each key, avoiding repeated disk reads
+- Template row styles are captured once per workbook instead of copied per cell
 - Progress tracking for long operations
 - Threaded processing to keep UI responsive
+- Cooperative cancellation to stop long runs early
 
 ### Data Processing
 - Handles categorical data conversion
